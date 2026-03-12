@@ -1,16 +1,18 @@
 """
-Agent – simple agentic loop with Gemini function calling.
+Agent – agentic loop with Gemini function calling for Steep metric analysis.
 
 Tools exposed to the LLM:
-  run_query(sql)                             – execute SQL, return rows
+  query_steep_metric(metric_id, days, time_grain)  – fetch metric data from Steep
+  get_snapshot_history(metric_id, days)             – fetch BQ snapshots
   plot_results(data, chart_type, x_col, y_col, title)  – draw a chart, return file path
+  get_jira_releases(date)                          – Jira release context
 """
 
 import json
 import logging
 import os
 import tempfile
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from google import genai
@@ -22,80 +24,60 @@ logger = logging.getLogger(__name__)
 
 # ── System prompt ─────────────────────────────────────────────────────────────
 
-SYSTEM_PROMPT = """You are a data analyst assistant with access to three tools: `run_query`, `plot_results`, and `get_jira_releases`. You help users query and understand anomaly detection results stored in BigQuery.
+SYSTEM_PROMPT = """You are a data analyst helping to analyse anomalies in game metrics from Steep. You have access to four tools: `query_steep_metric`, `get_snapshot_history`, `plot_results` and `get_jira_releases`.
 
 CRITICAL INSTRUCTIONS:
-- You MUST call tools using function calls, never output Python code or any code.
-- Do NOT write `print(...)`, `import`, `pd.DataFrame`, `plt.plot` or any code.
-- Do NOT use `default_api.` syntax. Use function calls directly.
-- When plotting, ALWAYS aggregate data first (e.g. GROUP BY DATE) so data has one row per date, not one row per event.
+- You MUST use function calls, NEVER write code.
+- Do NOT use `print(...)`, `import`, `pd.DataFrame` or similar.
 
-## Anomaly tracking table
-Full table name (always use this exactly):
-  `lia-project-sandbox-deletable.anomaly_checks_demo.daily_anomaly_check_results`
+## Language
+- Default to English.
+- If the user writes in Swedish, respond in Swedish.
+- Match the language of the user's message.
 
-## Schema (anomaly table)
-| Column       | Type      | Description                                              |
-|--------------|-----------|----------------------------------------------------------|
-| table_name   | STRING    | Name of the source table that was checked                |
-| is_valid     | BOOL      | True = no anomalies found, False = anomaly detected      |
-| reason       | STRING    | Human-readable description of the problem (if is_valid=False, else null/empty) |
-| checked_at   | TIMESTAMP | When the check was run                                   |
+## Context
+We monitor 5 key metrics from a game application via Steep Analytics:
+- **First Opens Game** – new users opening the game (↓ = bad)
+- **Active Users Game** – daily active players (↓ = bad)
+- **Matches 1v1** – number of 1v1 matches played (↓ = bad)
+- **MM Waiting Time For Match** – matchmaking wait time, seconds (↑ = bad)
+- **Crash ratio** – share of sessions that crash (↑ = bad)
 
-## Source tables
-The actual source data lives in the dataset configured via BQ_SOURCE_DATASET (e.g. `project.dataset.<table_name>`).
-When asked to analyse an anomaly for a specific table:
-- **MANDATORY FIRST STEP:** Before writing ANY query against a source table, you MUST run `SELECT column_name, data_type FROM \`project.dataset.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name = 'table'` to discover the exact column names. NEVER guess column names — always use the names returned by INFORMATION_SCHEMA.
-- Then read the anomaly reason carefully and decide what SQL and chart type best reveals the problem:
-  - **Enum/value anomaly** (reason mentions unexpected value): Query `SELECT column_value, COUNT(*) as count FROM table WHERE timestamp >= TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 60 DAY) GROUP BY column_value ORDER BY count DESC`. Use a bar chart with `x_col=column_value`, `y_col=count`, and pass the anomalous values (extracted from reason) as `highlight_values` (comma-separated) so they appear red.
-  - **Count/volume anomaly** (reason mentions too few/many rows): Query daily counts with `GROUP BY DATE(timestamp)`. Use a line chart.
-  - Use your judgment for other cases based on the schema and reason.
-- IMPORTANT: Always query data relative to TODAY (use `CURRENT_DATE()` or `CURRENT_TIMESTAMP()`), NOT relative to the anomaly date. The chart must show the full picture up to today so the user can see the current state.
-- Always aggregate data by day (GROUP BY DATE(...)) before plotting — never fetch raw rows for charts.
-- Use INFORMATION_SCHEMA if you need to discover the schema of a source table before querying it.
+Beta launched March 9-10, 2026. Data before that is unreliable.
+Strong day-of-week effect: Thursday/Friday ~30% lower, weekends ~40% higher.
 
-## Jira release context
-You have access to `get_jira_releases(date)` to look up Jira releases near a specific date.
-- Call this tool when the user asks about releases, versions, deployments, or when you need to correlate an anomaly with a release.
-- Do NOT call it for unrelated questions (e.g. "show me row counts").
-- If the anomaly timing coincides with a release (±7 days), mention it explicitly. The anomaly may have been caused by the release — e.g. a schema change, renamed enum value, or new pipeline version.
-- If the anomaly is likely explained by a release, say so clearly: "This anomaly likely coincides with release X on <date>, which may have introduced this change."
-- If no nearby release exists, do not speculate about releases.
+## Tools
+- `query_steep_metric(metric_id, days, time_grain)` – fetch daily/weekly data from Steep API
+- `get_snapshot_history(metric_id, days)` – fetch saved snapshots (cumulative 4h values) from BQ
+- `plot_results(data, chart_type, x_col, y_col, title)` – draw a chart
+- `get_jira_releases(date)` – fetch Jira releases near a date
 
 ## Rules
-- ALWAYS use fully qualified table names in SQL.
-- Use standard GoogleSQL (BigQuery dialect).
-- ALWAYS call `run_query` and `plot_results` as function calls — NEVER output code.
-- SQL MUST aggregate: for value anomalies use `GROUP BY column_value`; for volume anomalies use `GROUP BY DATE(...)`. Never fetch raw rows for charts.
-- For enum/value anomalies: use `chart_type='bar'` and pass `highlight_values` with the anomalous values from the reason.
-- When analysing an anomaly, ALWAYS pass `anomaly_date` (YYYY-MM-DD) to `plot_results` so a vertical marker line is drawn at the anomaly date on the chart.
-- Pass the aggregated result directly to `plot_results`.
-- Keep answers concise. If there are anomalies, highlight them clearly.
-- If is_valid is False, always include the reason in your answer.
-- Respond in the same language as the user's message. If the user writes in Swedish, respond in Swedish. Default to English.
+- Be concise but include important numbers.
+- When analysing an anomaly: 1) fetch recent data, 2) draw a graph, 3) provide a summary with possible explanation.
+- If the anomaly coincides with a release (±7 days), mention it.
+- Always include a recommendation: "investigate further", "likely normal", etc.
 """
 
-THREAD_SYSTEM_PROMPT = """You are a data analyst assistant with access to three tools: `run_query`, `plot_results`, and `get_jira_releases`. You help users explore a specific BigQuery source table via follow-up questions in a thread.
+THREAD_SYSTEM_PROMPT = """You are a data analyst helping users explore game metrics from Steep in a Discord thread. You have access to four tools: `query_steep_metric`, `get_snapshot_history`, `plot_results` and `get_jira_releases`.
 
 CRITICAL INSTRUCTIONS:
-- You MUST call tools using function calls, never output Python code or any code.
-- Do NOT write `print(...)`, `import`, `pd.DataFrame`, `plt.plot` or any code.
-- Do NOT use `default_api.` syntax. Use function calls directly.
-- When plotting, ALWAYS aggregate data first (e.g. GROUP BY DATE) so data has one row per date, not one row per event.
-- NEVER query the anomaly check table. The user's questions are ALWAYS about the source table specified in the prompt.
-- You ONLY answer questions related to the source table data, the anomaly, and Jira releases. If the user asks anything unrelated (math, trivia, general knowledge, etc.), politely decline and say you can only help with questions about the table and its data.
+- You MUST use function calls, NEVER write code.
+
+## Language
+- Default to English.
+- If the user writes in Swedish, respond in Swedish.
+- Match the language of the user's message.
+
+## Context
+We monitor game metrics via Steep Analytics. Beta launched March 9-10, 2026.
+Strong day-of-week effect: Thursday/Friday ~30% lower, weekends ~40% higher.
 
 ## Rules
-- ALWAYS use fully qualified table names in SQL.
-- Use standard GoogleSQL (BigQuery dialect).
-- ALWAYS call `run_query` and `plot_results` as function calls — NEVER output code.
-- **MANDATORY FIRST STEP:** Before writing ANY query against a source table, you MUST run `SELECT column_name, data_type FROM \`project.dataset.INFORMATION_SCHEMA.COLUMNS\` WHERE table_name = 'table'` to discover the exact column names. NEVER guess column names — always use the names returned by INFORMATION_SCHEMA.
-- For line plots over time, always aggregate: `GROUP BY DATE(...)` and `ORDER BY date`.
-- If the user says 'all', 'alla', or 'all occurrences', do NOT add a time filter — query all available data.
-- Pass the aggregated result directly to `plot_results`.
-- Keep answers concise. If there are anomalies, highlight them clearly.
-- When you create a chart, ALWAYS include a text summary describing what the chart shows: the key values, trends, date range, and any notable patterns. The user cannot refer back to chart images in follow-up questions, so your text description is the only record of what was plotted.
-- Respond in the same language as the user's message. If the user writes in Swedish, respond in Swedish. Default to English.
+- Be concise but include important numbers.
+- When creating charts, ALWAYS describe what the graph shows in text too.
+- If data was already fetched earlier in the conversation, reuse it for plotting instead of fetching again. Pass the existing data directly to plot_results.
+- Only answer questions about metrics and data. Politely decline if the user asks about other topics.
 """
 
 # ── Tool definitions ──────────────────────────────────────────────────────────
@@ -103,25 +85,50 @@ CRITICAL INSTRUCTIONS:
 def _get_tools() -> types.Tool:
     return types.Tool(function_declarations=[
         types.FunctionDeclaration(
-            name="run_query",
-            description="Execute a GoogleSQL query against BigQuery and return the results as a list of row objects.",
+            name="query_steep_metric",
+            description="Fetch time-series data for a Steep metric. Returns daily/weekly data points.",
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
-                    "sql": types.Schema(
+                    "metric_id": types.Schema(
                         type=types.Type.STRING,
-                        description="Valid GoogleSQL query. Always use fully qualified table names.",
+                        description="The Steep metric ID to query.",
+                    ),
+                    "days": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="Number of days of history to fetch (default 14).",
+                    ),
+                    "time_grain": types.Schema(
+                        type=types.Type.STRING,
+                        description="Time grain: 'daily', 'weekly', or 'monthly'. Default 'daily'.",
                     ),
                 },
-                required=["sql"],
+                required=["metric_id"],
+            ),
+        ),
+        types.FunctionDeclaration(
+            name="get_snapshot_history",
+            description="Fetch saved intraday snapshots (4-hour cumulative values) from BQ for a metric.",
+            parameters=types.Schema(
+                type=types.Type.OBJECT,
+                properties={
+                    "metric_id": types.Schema(
+                        type=types.Type.STRING,
+                        description="The Steep metric ID.",
+                    ),
+                    "days": types.Schema(
+                        type=types.Type.INTEGER,
+                        description="Number of days of snapshot history (default 7).",
+                    ),
+                },
+                required=["metric_id"],
             ),
         ),
         types.FunctionDeclaration(
             name="plot_results",
             description=(
                 "Draw a chart from data and save it as a PNG file. "
-                "Use this when the user asks for a graph, chart, or visualisation. "
-                "Supports grouped multi-line charts via group_col. "
+                "Supports line, bar, and pie charts. "
                 "Returns the file path to the saved PNG."
             ),
             parameters=types.Schema(
@@ -137,11 +144,11 @@ def _get_tools() -> types.Tool:
                     ),
                     "x_col": types.Schema(
                         type=types.Type.STRING,
-                        description="Column name to use for the X-axis (or pie labels).",
+                        description="Column name to use for the X-axis.",
                     ),
                     "y_col": types.Schema(
                         type=types.Type.STRING,
-                        description="Column name to use for the Y-axis (or pie values).",
+                        description="Column name to use for the Y-axis.",
                     ),
                     "title": types.Schema(
                         type=types.Type.STRING,
@@ -149,25 +156,11 @@ def _get_tools() -> types.Tool:
                     ),
                     "group_col": types.Schema(
                         type=types.Type.STRING,
-                        description=(
-                            "Optional. Column name to group by, producing one line/bar series per unique value. "
-                            "Use this when comparing multiple categories over time, e.g. one line per game_format."
-                        ),
-                    ),
-                    "highlight_values": types.Schema(
-                        type=types.Type.STRING,
-                        description=(
-                            "Optional. Comma-separated list of X-axis values to highlight in red. "
-                            "Use this to visually mark anomalous values in a bar chart, e.g. the unexpected enum values mentioned in the anomaly reason."
-                        ),
+                        description="Optional. Column name to group by for multi-line charts.",
                     ),
                     "anomaly_date": types.Schema(
                         type=types.Type.STRING,
-                        description=(
-                            "Optional. The date (YYYY-MM-DD) when the anomaly was detected. "
-                            "A vertical dashed line with a label will be drawn at this date on the chart. "
-                            "Always pass this when analysing an anomaly so the user can see exactly when it was flagged."
-                        ),
+                        description="Optional. Date (YYYY-MM-DD) to draw a vertical marker line at.",
                     ),
                 },
                 required=["data", "chart_type", "x_col", "y_col", "title"],
@@ -175,11 +168,7 @@ def _get_tools() -> types.Tool:
         ),
         types.FunctionDeclaration(
             name="get_jira_releases",
-            description=(
-                "Look up Jira releases near a specific date (±7 days). "
-                "Use this when the user asks about releases, versions, or deployments, "
-                "or when you want to check if a release may explain an anomaly."
-            ),
+            description="Look up Jira releases near a specific date (±7 days).",
             parameters=types.Schema(
                 type=types.Type.OBJECT,
                 properties={
@@ -196,17 +185,52 @@ def _get_tools() -> types.Tool:
 
 # ── Tool implementations ──────────────────────────────────────────────────────
 
-def _run_query(bq_client: Any, sql: str) -> list[dict]:
-    # Block destructive SQL statements
-    first_keyword = sql.strip().split()[0].upper() if sql.strip() else ""
-    blocked = {"DROP", "DELETE", "TRUNCATE", "ALTER", "CREATE", "INSERT", "UPDATE", "MERGE", "GRANT", "REVOKE"}
-    if first_keyword in blocked:
-        logger.warning("Blocked dangerous SQL: %s", sql[:200])
-        return [{"error": f"SQL statement '{first_keyword}' is not allowed. Only SELECT queries are permitted."}]
+def _query_steep_metric(steep_client: Any, metric_id: str, days: int = 14, time_grain: str = "daily") -> list[dict]:
+    """Fetch metric data from Steep API, filling in missing days with 0."""
     try:
-        return bq_client.run_query(sql)
+        resp = steep_client.query_metric_recent(metric_id, days=days, time_grain=time_grain)
+        data = resp.get("data", [])
+        points = {p["time"][:10]: p["metric"] for p in data}
+
+        if time_grain == "daily" and points:
+            # Fill missing dates with 0
+            all_dates = sorted(points.keys())
+            start = datetime.strptime(all_dates[0], "%Y-%m-%d").date()
+            end = datetime.strptime(all_dates[-1], "%Y-%m-%d").date()
+            filled = []
+            current = start
+            while current <= end:
+                d = current.isoformat()
+                filled.append({"date": d, "value": points.get(d, 0)})
+                current += timedelta(days=1)
+            return filled
+
+        return [{"date": p["time"][:10], "value": p["metric"]} for p in data]
     except Exception as e:
-        logger.error("Query failed: %s", e)
+        logger.error("Steep query failed: %s", e)
+        return [{"error": str(e)}]
+
+
+def _get_snapshot_history(bq_client: Any, metric_id: str, days: int = 7) -> list[dict]:
+    """Fetch snapshot history from BQ."""
+    from config import Config
+    sql = (
+        f"SELECT snapshot_date, snapshot_hour, cumulative_value, "
+        f"FORMAT_TIMESTAMP('%Y-%m-%d %H:%M', captured_at) as captured "
+        f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+        f"WHERE metric_id = @metric_id "
+        f"AND snapshot_date >= DATE_SUB(CURRENT_DATE(), INTERVAL @days DAY) "
+        f"ORDER BY snapshot_date, snapshot_hour"
+    )
+    from google.cloud import bigquery as _bq
+    params = [
+        _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+        _bq.ScalarQueryParameter("days", "INT64", days),
+    ]
+    try:
+        return bq_client.run_query(sql, params=params)
+    except Exception as e:
+        logger.error("Snapshot query failed: %s", e)
         return [{"error": str(e)}]
 
 
@@ -292,8 +316,19 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     for spine in ax.spines.values():
         spine.set_color(GRID_COLOR)
 
-    # Format large Y-axis numbers with thousands separator
-    ax.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    # Format Y-axis: use decimals for small values, thousands separator for large
+    def _y_fmt(x, _):
+        ax_val = abs(x)
+        if ax_val == 0:
+            return "0"
+        if ax_val < 0.01:
+            return f"{x:.4f}"
+        if ax_val < 1:
+            return f"{x:.3f}"
+        if ax_val < 100:
+            return f"{x:.2f}"
+        return f"{x:,.0f}"
+    ax.yaxis.set_major_formatter(mticker.FuncFormatter(_y_fmt))
 
     if group_col and group_col in data[0]:
         from collections import defaultdict
@@ -316,7 +351,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             ys = [xy.get(x, 0) for x in all_xs]
             color = ACCENT_COLORS[i % len(ACCENT_COLORS)]
             if chart_type == "line":
-                ax.plot(x_indices, ys, marker="o", label=_pretty_label(group_name), color=color, linewidth=2, markersize=4)
+                ax.plot(x_indices, ys, marker="o", label=_pretty_label(group_name), color=color, linewidth=2, markersize=6)
             else:
                 ax.bar(x_indices, ys, label=_pretty_label(group_name), alpha=0.85, color=color)
         ax.legend(framealpha=0.9, fontsize=10, facecolor=SURFACE_COLOR, edgecolor=GRID_COLOR, labelcolor=TEXT_COLOR)
@@ -349,7 +384,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             ax.grid(axis="y", linestyle="--", alpha=0.3, color=GRID_COLOR)
             _thin_ticks(ax, xs)
         elif chart_type == "line":
-            ax.plot(x_indices, ys, marker="o", color=NORMAL_COLOR, linewidth=2, markersize=4)
+            ax.plot(x_indices, ys, marker="o", color=NORMAL_COLOR, linewidth=2.5, markersize=6, markerfacecolor="white", markeredgecolor=NORMAL_COLOR, markeredgewidth=2)
             ax.fill_between(x_indices, ys, alpha=0.1, color=NORMAL_COLOR)
             ax.set_xlabel(_pretty_label(x_col), fontsize=11)
             ax.set_ylabel(_pretty_label(y_col), fontsize=11)
@@ -405,9 +440,10 @@ class AgentResponse:
 
 
 class Agent:
-    def __init__(self, config: Any, bq_client: Any):
+    def __init__(self, config: Any, bq_client: Any, steep_client: Any):
         self.config = config
         self.bq = bq_client
+        self.steep = steep_client
         self.client = genai.Client(
             vertexai=True,
             project=config.GCP_PROJECT_ID,
@@ -486,8 +522,28 @@ class Agent:
                 args = dict(fc.args)
                 logger.info("Tool call: %s(%s)", name, list(args.keys()))
 
-                if name == "run_query":
-                    result = _run_query(self.bq, args["sql"])
+                if name == "query_steep_metric":
+                    result = _query_steep_metric(
+                        self.steep,
+                        args["metric_id"],
+                        days=int(args.get("days", 14)),
+                        time_grain=args.get("time_grain", "daily"),
+                    )
+                    tool_results.append(
+                        types.Part(
+                            function_response=types.FunctionResponse(
+                                name=name,
+                                response={"result": result},
+                            )
+                        )
+                    )
+
+                elif name == "get_snapshot_history":
+                    result = _get_snapshot_history(
+                        self.bq,
+                        args["metric_id"],
+                        days=int(args.get("days", 7)),
+                    )
                     tool_results.append(
                         types.Part(
                             function_response=types.FunctionResponse(

@@ -27,22 +27,64 @@ class Config:
 
     DISCORD_BOT_TOKEN: str = _optional("DISCORD_BOT_TOKEN")
     DISCORD_ALERT_CHANNEL_ID: str = _optional("DISCORD_ALERT_CHANNEL_ID")
-    DISCORD_WEBHOOK_URL: str = _optional("DISCORD_WEBHOOK_URL")
 
-    # The one table this bot knows about
-    BQ_TABLE: str = "lia-project-sandbox-deletable.anomaly_checks_demo.daily_anomaly_check_results"
-
-    # The dataset where the real source tables live (used for deep analysis)
-    BQ_SOURCE_DATASET: str = _optional("BQ_SOURCE_DATASET", "goals-analytics.prod_event_classes")
-
-    # Maximum rows returned from any single query
+    # BQ snapshot table for Steep metric snapshots
+    BQ_SNAPSHOT_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.steep_metric_snapshots"
+    )
     MAX_QUERY_ROWS: int = 200
 
-    # How often the monitor checks BQ (in seconds), default 1 hour
-    MONITOR_INTERVAL_SECONDS: int = int(_optional("MONITOR_INTERVAL_SECONDS", "3600"))
+    # Monitor interval – 4 hours (matches Steep cache TTL)
+    MONITOR_INTERVAL_SECONDS: int = int(_optional("MONITOR_INTERVAL_SECONDS", "14400"))
 
     # Jira integration for release context
     JIRA_BASE_URL: str = _optional("JIRA_BASE_URL", "")
     JIRA_EMAIL: str = _optional("JIRA_EMAIL", "")
     JIRA_API_TOKEN: str = _optional("JIRA_API_TOKEN", "")
     JIRA_PROJECT_KEY: str = _optional("JIRA_PROJECT_KEY", "")
+
+    # Steep integration
+    STEEP_API_TOKEN: str = _require("STEEP_API_TOKEN")
+
+    # Beta launch date – data before this is unreliable
+    BASELINE_START_DATE: str = "2026-03-10"
+
+
+# ── Monitored metrics ────────────────────────────────────────────────────────
+
+MONITORED_METRICS: list[dict] = [
+    {
+        "id": "xbkYiyTivpfp",
+        "label": "First Opens Game",
+        "direction": "down_is_bad",
+    },
+    {
+        "id": "08O_4SH2zpzO",
+        "label": "Active Users Game",
+        "direction": "down_is_bad",
+    },
+    {
+        "id": "2o79cTggQf3m",
+        "label": "Matches 1v1",
+        "direction": "down_is_bad",
+    },
+    {
+        "id": "zefdZQHmk2y6",
+        "label": "MM Waiting Time For Match",
+        "direction": "up_is_bad",
+    },
+    {
+        "id": "vgacJieCzuuo",
+        "label": "Crash ratio",
+        "direction": "up_is_bad",
+    },
+]
+
+
+# ── Thresholds (symmetric – absolute percentage change) ──────────────────────
+
+THRESHOLDS = {
+    "pace": {"warning": 0.10, "critical": 0.25},   # ±10% / ±25%
+    "dod":  {"warning": 0.08, "critical": 0.20},   # ±8%  / ±20%
+    "wow":  {"warning": 0.05, "critical": 0.15},   # ±5%  / ±15%
+}
