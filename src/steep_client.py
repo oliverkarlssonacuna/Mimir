@@ -28,6 +28,7 @@ class SteepClient:
         resp = self.session.get(
             f"{BASE_URL}/v1/metrics",
             params={"expand": str(expand).lower()},
+            timeout=15,
         )
         resp.raise_for_status()
         return resp.json().get("data", [])
@@ -73,6 +74,7 @@ class SteepClient:
             resp = self.session.post(
                 f"{BASE_URL}/v1/metrics/{metric_id}/query",
                 json=body,
+                timeout=15,
             )
             if resp.status_code == 429:
                 wait = 2 ** attempt
