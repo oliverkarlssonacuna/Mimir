@@ -1,0 +1,20 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY pyproject.toml .
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir \
+    "discord.py>=2.4.0" \
+    google-cloud-bigquery \
+    google-genai \
+    python-dotenv \
+    matplotlib \
+    tabulate \
+    requests \
+    aiohttp
+
+ENV PYTHONPATH=/app/src
+
+CMD ["python", "src/bot.py"]
