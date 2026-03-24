@@ -32,6 +32,10 @@ class Config:
     BQ_SNAPSHOT_TABLE: str = (
         "lia-project-sandbox-deletable.anomaly_checks_demo.steep_metric_snapshots"
     )
+    # BQ config table for metric alert rules
+    BQ_METRIC_CONFIGS_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.metric_configs"
+    )
     MAX_QUERY_ROWS: int = 200
 
     # Monitor interval – 4 hours (matches Steep cache TTL)
@@ -47,44 +51,20 @@ class Config:
     STEEP_API_TOKEN: str = _require("STEEP_API_TOKEN")
 
     # Beta launch date – data before this is unreliable
-    BASELINE_START_DATE: str = "2026-03-10"
+    BASELINE_START_DATE: str = "2026-03-09"
+
+    # Admin web UI URL (used in /admin Discord command)
+    ADMIN_URL: str = _optional("ADMIN_URL", "http://localhost:8080")
+
+    # Internal HTTP port for bot — web server posts here to trigger config reload
+    BOT_INTERNAL_PORT: int = int(_optional("BOT_INTERNAL_PORT", "8081"))
 
 
-# ── Monitored metrics ────────────────────────────────────────────────────────
-
-MONITORED_METRICS: list[dict] = [
-    {
-        "id": "xbkYiyTivpfp",
-        "label": "First Opens Game",
-        "direction": "down_is_bad",
-    },
-    {
-        "id": "08O_4SH2zpzO",
-        "label": "Active Users Game",
-        "direction": "down_is_bad",
-    },
-    {
-        "id": "2o79cTggQf3m",
-        "label": "Matches 1v1",
-        "direction": "down_is_bad",
-    },
-    {
-        "id": "zefdZQHmk2y6",
-        "label": "MM Waiting Time For Match",
-        "direction": "up_is_bad",
-    },
-    {
-        "id": "vgacJieCzuuo",
-        "label": "Crash ratio",
-        "direction": "up_is_bad",
-    },
-]
-
-
-# ── Thresholds (symmetric – absolute percentage change) ──────────────────────
+# ── Thresholds (symmetric – absolute percentage change) ────────────────────── 
+# Kept as fallback defaults only. Per-metric thresholds are stored in BQ.
 
 THRESHOLDS = {
-    "pace": {"warning": 0.10, "critical": 0.25},   # ±10% / ±25%
-    "dod":  {"warning": 0.08, "critical": 0.20},   # ±8%  / ±20%
-    "wow":  {"warning": 0.05, "critical": 0.15},   # ±5%  / ±15%
+    "pace": 0.15,
+    "dod":  0.10,
+    "wow":  0.10,
 }

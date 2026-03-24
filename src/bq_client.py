@@ -48,6 +48,32 @@ class BQClient:
         job.result()  # wait for completion
         return job.num_dml_affected_rows or 0
 
+    def load_metric_configs(self, table: str) -> list[dict[str, Any]]:
+        """Load all enabled metric configs from BQ. Returns list of dicts."""
+        sql = f"SELECT * FROM `{table}` WHERE enabled = TRUE ORDER BY metric_label"
+        return self.run_query(sql)
+
+    def update_threshold(
+        self,
+        table: str,
+        metric_id: str,
+        comparison: str,
+        threshold: float,
+    ) -> int:
+        """Update a single threshold for a metric. comparison: pace|dod|wow."""
+        col = f"{comparison}_threshold"
+        from google.cloud import bigquery as _bq
+        sql = (
+            f"UPDATE `{table}` "
+            f"SET {col} = @threshold, updated_at = CURRENT_TIMESTAMP() "
+            "WHERE metric_id = @metric_id"
+        )
+        params = [
+            _bq.ScalarQueryParameter("threshold", "FLOAT64", threshold),
+            _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+        ]
+        return self.run_update(sql, params)
+
     @staticmethod
     def _serialize(v: Any) -> Any:
         if isinstance(v, Decimal):

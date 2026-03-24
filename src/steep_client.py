@@ -69,7 +69,7 @@ class SteepClient:
         if slice_id:
             body["sliceId"] = slice_id
 
-        for attempt in range(3):
+        for attempt in range(6):
             resp = self.session.post(
                 f"{BASE_URL}/v1/metrics/{metric_id}/query",
                 json=body,
@@ -80,6 +80,7 @@ class SteepClient:
                 time.sleep(wait)
                 continue
             resp.raise_for_status()
+            time.sleep(0.3)  # throttle to avoid 429 rate limiting
             return resp.json()
         resp.raise_for_status()
         return resp.json()
