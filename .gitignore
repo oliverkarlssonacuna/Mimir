@@ -1,9 +1,6 @@
 # Hemligheter – får ALDRIG laddas upp
 .env
 
-# Lokala deploy-skript
-deploy_web.sh
-deploy_bot.sh
 
 # Python
 venv/
