@@ -1,0 +1,981 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Mimir — Admin</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: { sans: ['Inter', 'system-ui', 'sans-serif'] }
+        }
+      }
+    }
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; background-color: #13151a; color: #e2e8f0; }
+    .threshold-cell { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
+    input[type=number]::-webkit-inner-spin-button,
+    input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+    input[type=number] { -moz-appearance: textfield; }
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #1c1f27; }
+    ::-webkit-scrollbar-thumb { background: #3a3f4d; border-radius: 3px; }
+
+    .tooltip-icon {
+      font-size: 11px;
+      color: #4f5668;
+      cursor: default;
+      position: relative;
+    }
+    .tooltip-icon:hover { color: #9aa0b4; }
+    .tooltip-box {
+      position: fixed;
+      z-index: 9999;
+      max-width: 240px;
+      padding: 7px 10px;
+      background: #2a2d38;
+      color: #c8cdd8;
+      font-size: 12px;
+      font-weight: 400;
+      border-radius: 8px;
+      border: 1px solid #3a3f4d;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.5);
+      pointer-events: none;
+      line-height: 1.5;
+    }
+    .direction-badge { transition: filter 0.15s; }
+    .direction-badge:hover { filter: brightness(1.2); }
+    th[data-sortcol]:hover { background: #1e2028 !important; }
+    @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  </style>
+</head>
+
+<body class="h-full antialiased">
+
+  <!-- ── Header ────────────────────────────────────────────────────────────── -->
+  <header class="sticky top-0 z-40 border-b" style="background:#1c1f27; border-color:#2a2d38;">
+    <div class="max-w-screen-xl mx-auto px-6 h-16 flex items-center justify-between">
+
+      <!-- Brand -->
+      <div class="flex items-center gap-3">
+        <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style="background:#fff;">
+          <img src="/static/logo.png" alt="Mimir" class="w-6 h-6 object-contain;">
+        </div>
+        <div>
+          <p class="text-sm font-semibold text-white leading-none">Mimir</p>
+          <p class="text-xs mt-0.5" style="color:#6b7385;">Admin Dashboard</p>
+        </div>
+      </div>
+
+      <!-- User -->
+      <div class="flex items-center gap-5">
+        <!-- Restart button -->
+        <button id="restart-btn"
+          onclick="restartMimir()"
+          class="flex items-center gap-1.5 text-sm font-medium px-3 py-1.5 rounded-lg border transition-all"
+          style="color:#f59e0b; border-color:#78350f; background:#1c1810;"
+          onmouseover="this.style.background='#292010'" onmouseout="this.style.background='#1c1810'">
+          <svg id="restart-icon" xmlns="http://www.w3.org/2000/svg" class="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2.5">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          <span id="restart-label">Restart Mimir</span>
+        </button>
+
+        <div class="flex items-center gap-2">
+          <div class="w-7 h-7 rounded-full flex items-center justify-center"
+               style="background:#2a2d3e;">
+            <span class="text-xs font-semibold" style="color:#818cf8;">
+              {{ user.name[0].upper() if user.name else "?" }}
+            </span>
+          </div>
+          <span class="text-sm hidden sm:block" style="color:#9aa0b4;">{{ user.email }}</span>
+        </div>
+        <a href="/auth/logout"
+           class="text-sm font-medium transition-colors" style="color:#4f5668;"
+           onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+          Sign out
+        </a>
+      </div>
+
+    </div>
+  </header>
+
+  <!-- ── Main ──────────────────────────────────────────────────────────────── -->
+  <main class="max-w-screen-xl mx-auto px-6 py-8">
+
+    <!-- Page title -->
+    <div class="mb-6">
+      <h1 class="text-xl font-semibold text-white">Alert Thresholds</h1>
+      <p class="text-sm mt-1" style="color:#6b7385;">
+        Click any threshold value to edit it. Changes are saved instantly to BigQuery. Use <strong style="color:#f59e0b;">Restart Mimir</strong> to clear alert history and trigger an immediate check.
+      </p>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+        <p class="text-xs font-medium uppercase tracking-wide" style="color:#6b7385;">Total Metrics</p>
+        <p class="text-3xl font-bold text-white mt-1 tabular-nums">{{ total_count }}</p>
+      </div>
+      <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+        <p class="text-xs font-medium uppercase tracking-wide" style="color:#6b7385;">Active</p>
+        <p class="text-3xl font-bold mt-1 tabular-nums" style="color:#34d399;">{{ active_count }}</p>
+      </div>
+      <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+        <p class="text-xs font-medium uppercase tracking-wide" style="color:#6b7385;">Inactive</p>
+        <p class="text-3xl font-bold mt-1 tabular-nums" style="color:#4f5668;">{{ total_count - active_count }}</p>
+      </div>
+    </div>
+
+    <!-- Table card -->
+    <div class="rounded-xl border overflow-hidden shadow-xl" style="background:#1c1f27; border-color:#2a2d38;">
+
+      <!-- Toolbar -->
+      <div class="px-6 py-4 border-b flex flex-wrap items-center gap-3" style="border-color:#2a2d38;">
+        <!-- Bulk hint -->
+        <p class="text-xs flex items-center gap-1.5 font-medium" style="color:#f59e0b;" id="bulk-hint">
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z"/>
+          </svg>
+          Tick rows to bulk-edit thresholds
+        </p>
+
+        <!-- Search -->
+        <div class="relative flex-1 min-w-[200px] max-w-sm ml-auto">
+          <svg class="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none"
+               fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+              d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
+          </svg>
+          <input id="search-input" type="text" placeholder="Search metrics…"
+            class="w-full pl-9 pr-4 py-2 text-sm rounded-lg border outline-none"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
+            oninput="filterTable()"
+            onfocus="this.style.borderColor='#6366f1'"
+            onblur="this.style.borderColor='#2a2d38'">
+        </div>
+
+        <!-- Direction filter -->
+        <select id="filter-direction" onchange="filterTable()"
+          class="text-sm rounded-lg border px-3 py-2 outline-none cursor-pointer"
+          style="background:#13151a; border-color:#2a2d38; color:#9aa0b4;">
+          <option value="">All directions</option>
+          <option value="alert_on_drop">Drop alert</option>
+          <option value="alert_on_rise">Rise alert</option>
+        </select>
+
+        <!-- Status filter -->
+        <select id="filter-status" onchange="filterTable()"
+          class="text-sm rounded-lg border px-3 py-2 outline-none cursor-pointer"
+          style="background:#13151a; border-color:#2a2d38; color:#9aa0b4;">
+          <option value="">All statuses</option>
+          <option value="active">Active</option>
+          <option value="inactive">Inactive</option>
+        </select>
+
+        <p class="text-sm" style="color:#4f5668;" id="row-count"></p>
+      </div>
+
+      <!-- ── Change notice banner ─────────────────────────────────────────────── -->
+      <div id="change-banner" class="hidden px-6 py-3 border-b flex items-start gap-3"
+           style="background:#15202d; border-color:#1e3a5f;">
+        <svg class="w-4 h-4 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"
+             style="color:#60a5fa;">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z"/>
+        </svg>
+        <div class="flex-1 text-xs leading-relaxed" style="color:#93c5fd;">
+          <span id="banner-next-run" class="font-medium">Next Mimir check: fetching…</span>
+          <span class="mx-1.5 opacity-40">·</span>
+          <span>Mimir only alerts once per metric per day — restart to apply changes immediately.</span>
+        </div>
+        <button onclick="restartMimirAndDismiss()"
+                class="flex-shrink-0 text-xs font-medium px-3 py-1 rounded-lg whitespace-nowrap"
+                style="background:#1e3a5f; color:#60a5fa; border:1px solid #2a5580;">
+          Restart Mimir
+        </button>
+        <button onclick="dismissBanner()"
+                class="flex-shrink-0 p-1 rounded opacity-50 hover:opacity-100 transition-opacity"
+                style="color:#60a5fa;">
+          <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Table -->
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm" id="metrics-table">
+          <thead>
+            <tr class="border-b" style="border-color:#2a2d38; background:#171a21;">
+              <!-- Select-all checkbox -->
+              <th class="pl-5 pr-2 py-3">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" id="select-all-cb"
+                         class="w-4 h-4 rounded cursor-pointer accent-indigo-500"
+                         onclick="toggleSelectAll(this)"
+                         title="Select all visible">
+                  <span class="text-xs font-semibold uppercase tracking-wide whitespace-nowrap" style="color:#4f5668;">Select all</span>
+                </label>
+              </th>
+              <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="label" onclick="sortTable('label')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                Metric<svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg>
+              </th>
+              <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="direction" onclick="sortTable('direction')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                <span class="flex items-center gap-1">Direction <span class="tooltip-icon" data-tip="Drop alert: triggers when value falls below threshold. Rise alert: triggers when value exceeds threshold.">ⓘ</span><svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg></span>
+              </th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="pace" onclick="sortTable('pace')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                <span class="inline-flex items-center gap-1">Pace % <span class="tooltip-icon" data-tip="Today vs. the same weekday last week at the same hour. Updated every 4–5 hours.">ⓘ</span><svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg></span>
+              </th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="dod" onclick="sortTable('dod')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                <span class="inline-flex items-center gap-1">DoD % <span class="tooltip-icon" data-tip="Day-over-day: Yesterday's total vs. the day before.">ⓘ</span><svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg></span>
+              </th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="wow" onclick="sortTable('wow')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                <span class="inline-flex items-center gap-1">WoW % <span class="tooltip-icon" data-tip="Week-over-week: Yesterday's total vs. the same day last week.">ⓘ</span><svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg></span>
+              </th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="status" onclick="sortTable('status')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                <span class="flex items-center justify-center gap-1">Status <span class="tooltip-icon" data-tip="Active metrics are monitored. Inactive metrics are skipped.">ⓘ</span><svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg></span>
+              </th>
+              <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
+                  style="color:#4f5668;" data-sortcol="updated" onclick="sortTable('updated')"
+                  onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
+                Last Updated<svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg>
+              </th>
+            </tr>
+          </thead>
+
+          <tbody class="divide-y divide-gray-50" id="table-body">
+            {% for m in metrics %}
+            <tr class="group border-b transition-colors" style="border-color:#1e2028;"
+                onmouseover="this.style.background='#20232c'" onmouseout="this.style.background=''"
+                data-label="{{ m.metric_label | lower }}"
+                data-direction="{{ m.direction }}"
+                data-enabled="{{ 'active' if m.enabled else 'inactive' }}"
+                data-updated="{{ m.updated_at[:10] if m.updated_at else '' }}">
+
+              <!-- Row checkbox -->
+              <td class="pl-5 pr-2 py-4 w-8">
+                <input type="checkbox" class="row-cb w-4 h-4 rounded cursor-pointer accent-indigo-500"
+                       data-metric="{{ m.metric_id }}"
+                       onclick="onRowCheck()">
+              </td>
+
+              <!-- Metric name -->
+              <td class="px-6 py-4">
+                <div class="font-medium text-white leading-tight">{{ m.metric_label }}</div>
+                {% if m.steep_url %}
+                <a href="{{ m.steep_url }}" target="_blank" rel="noopener noreferrer"
+                   class="text-xs opacity-0 group-hover:opacity-100 transition-opacity mt-0.5 inline-block"
+                   style="color:#6366f1;">
+                  View in Steep ↗
+                </a>
+                {% endif %}
+              </td>
+
+              <!-- Direction badge -->
+              <td class="px-4 py-4 whitespace-nowrap">
+                {% if m.direction == "alert_on_rise" or m.direction == "up_is_bad" %}
+                <span class="direction-badge inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer"
+                      style="background:#2d1d20; color:#f87171; border:1px solid #3d2022;"
+                      data-metric="{{ m.metric_id }}"
+                      data-direction="alert_on_rise"
+                      onclick="toggleDirection(this)"
+                      title="Click to toggle direction">
+                  <svg class="w-3 h-3 direction-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/>
+                  </svg>
+                  <span class="badge-label">Rise alert</span>
+                </span>
+                {% else %}
+                <span class="direction-badge inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer"
+                      style="background:#1a1f35; color:#818cf8; border:1px solid #252b45;"
+                      data-metric="{{ m.metric_id }}"
+                      data-direction="alert_on_drop"
+                      onclick="toggleDirection(this)"
+                      title="Click to toggle direction">
+                  <svg class="w-3 h-3 direction-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                  <span class="badge-label">Drop alert</span>
+                </span>
+                {% endif %}
+              </td>
+
+              <!-- Threshold cells (Pace, DoD, WoW) -->
+              {% for comp, val in [("pace", m.pace_threshold), ("dod", m.dod_threshold), ("wow", m.wow_threshold)] %}
+              <td class="px-4 py-4 text-center">
+                <span class="threshold-cell inline-block min-w-[64px] px-3 py-1.5 rounded-lg text-sm font-medium tabular-nums cursor-pointer border"
+                      style="background:#13151a; color:#9aa0b4; border-color:#2a2d38;"
+                      data-metric="{{ m.metric_id }}"
+                      data-comparison="{{ comp }}"
+                      data-value="{{ ((val or 0) * 100) | round(1) }}"
+                      onclick="startEdit(this)"
+                      title="Click to edit">
+                  {{ ((val or 0) * 100) | round(1) }}%
+                </span>
+              </td>
+              {% endfor %}
+
+              <!-- Status toggle -->
+              <td class="px-4 py-4 text-center">
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only"
+                         data-metric="{{ m.metric_id }}"
+                         {{ 'checked' if m.enabled else '' }}
+                         onchange="toggleMetric('{{ m.metric_id }}', this.checked, this)">
+                  <div class="w-10 h-5 rounded-full relative transition-colors"
+                       style="background:{{ '#4f46e5' if m.enabled else '#2a2d38' }};"
+                       id="toggle-track-{{ m.metric_id }}">
+                    <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
+                         style="left:{{ '22px' if m.enabled else '2px' }};"
+                         id="toggle-thumb-{{ m.metric_id }}"></div>
+                  </div>
+                </label>
+              </td>
+
+              <!-- Last updated -->
+              <td class="px-6 py-4 text-xs whitespace-nowrap" style="color:#4f5668;">
+                <span class="relative-date" data-date="{{ m.updated_at[:10] if m.updated_at else '' }}">
+                  {{ m.updated_at[:10] if m.updated_at else "—" }}
+                </span>
+              </td>
+
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Empty state (shown by JS when search has no results) -->
+      <div id="empty-state" class="hidden py-16 text-center">
+        <svg class="mx-auto w-10 h-10 mb-3" style="color:#2a2d38;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <p class="text-sm" style="color:#4f5668;">No metrics match your search.</p>
+      </div>
+
+    </div><!-- /table card -->
+
+  </main>
+
+  <!-- ── Toast container ───────────────────────────────────────────────────── -->
+  <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- ── Bulk edit bar (shown when rows are selected) ─────────────────────── -->
+  <div id="bulk-bar"
+       class="hidden fixed bottom-0 left-0 right-0 z-40 border-t px-6 py-4"
+       style="background:#1c1f27; border-color:#3a3f4d; box-shadow:0 -4px 24px rgba(0,0,0,0.5);">
+    <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4">
+      <span id="bulk-label" class="text-sm font-medium" style="color:#9aa0b4;">0 selected</span>
+
+      <div class="flex flex-wrap items-center gap-3 flex-1">
+        {% for comp in ["Pace", "DoD", "WoW"] %}
+        <div class="flex items-center gap-1.5">
+          <label class="text-xs font-medium" style="color:#6b7385;">{{ comp }} %</label>
+          <input type="number" min="0.1" max="100" step="0.1"
+                 id="bulk-{{ comp | lower }}"
+                 placeholder="No change"
+                 class="w-24 px-2 py-1.5 text-sm rounded-lg border outline-none tabular-nums"
+                 style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
+                 onfocus="this.style.borderColor='#6366f1'"
+                 onblur="this.style.borderColor='#2a2d38'">
+        </div>
+        {% endfor %}
+      </div>
+
+      <div class="flex items-center gap-3 ml-auto">
+        <button onclick="clearSelection()"
+                class="text-sm px-3 py-1.5 rounded-lg border transition-colors"
+                style="color:#6b7385; border-color:#2a2d38;"
+                onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#6b7385'">
+          Cancel
+        </button>
+        <button id="bulk-apply-btn" onclick="applyBulk()"
+                class="text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
+                style="background:#4f46e5; color:#fff;">
+          Apply to <span id="bulk-count">0</span> metrics
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── JavaScript ────────────────────────────────────────────────────────── -->
+  <script>
+
+    // ── Toast notifications ────────────────────────────────────────────────────
+
+    function showToast(message, isError = false) {
+      const container = document.getElementById('toast-container');
+      const el = document.createElement('div');
+      el.className = [
+        'pointer-events-auto flex items-center gap-3 px-4 py-3 rounded-xl shadow-xl',
+        'text-sm font-medium border transition-all duration-300',
+        isError
+          ? 'border'
+          : 'border',
+      ].join(' ');
+      el.style.cssText = isError
+        ? 'background:#2d1d20; color:#f87171; border-color:#3d2022; box-shadow:0 8px 24px rgba(0,0,0,0.5);'
+        : 'background:#1a2d25; color:#34d399; border-color:#1e3d30; box-shadow:0 8px 24px rgba(0,0,0,0.5);';
+
+      const icon = isError
+        ? '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>'
+        : '<path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>';
+
+      el.innerHTML = `
+        <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          ${icon}
+        </svg>
+        <span>${message}</span>`;
+
+      container.appendChild(el);
+
+      setTimeout(() => {
+        el.style.opacity = '0';
+        el.style.transform = 'translateX(0.5rem)';
+        setTimeout(() => el.remove(), 300);
+      }, 3200);
+    }
+
+
+    // ── Change notice banner ───────────────────────────────────────────────────
+
+    let _bannerCountdown = null;
+
+    function dismissBanner() {
+      document.getElementById('change-banner').classList.add('hidden');
+      if (_bannerCountdown) { clearInterval(_bannerCountdown); _bannerCountdown = null; }
+    }
+
+    function _formatSecs(secs) {
+      if (secs === null || secs === undefined) return 'upp till 4 timmar';
+      const h = Math.floor(secs / 3600);
+      const m = Math.floor((secs % 3600) / 60);
+      const s = secs % 60;
+      if (h > 0) return m > 0 ? `${h}h ${m}m` : `${h}h`;
+      if (m > 0) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+      return `${s}s`;
+    }
+
+    async function showChangeBanner() {
+      const banner    = document.getElementById('change-banner');
+      const nextRunEl = document.getElementById('banner-next-run');
+      banner.classList.remove('hidden');
+      if (_bannerCountdown) { clearInterval(_bannerCountdown); _bannerCountdown = null; }
+      nextRunEl.textContent = 'Next Mimir check: fetching…';
+
+      let secsLeft = null;
+      let botOffline = false;
+      try {
+        const r = await fetch('/admin/bot-status');
+        if (r.ok) {
+          const d = await r.json();
+          secsLeft = d.seconds_until_next_run;
+          botOffline = !d.running;
+        }
+      } catch { botOffline = true; }
+
+      function update() {
+        if (botOffline) {
+          nextRunEl.textContent = 'Mimir offline';
+        } else if (secsLeft !== null) {
+          nextRunEl.textContent = `Next Mimir check: in ${_formatSecs(secsLeft)}`;
+          if (secsLeft > 0) secsLeft--;
+        } else {
+          nextRunEl.textContent = 'Next Mimir check: within 4 hours';
+        }
+      }
+      update();
+      _bannerCountdown = setInterval(update, 1000);
+    }
+
+    async function restartMimirAndDismiss() {
+      dismissBanner();
+      await restartMimir();
+    }
+
+
+    // ── Inline threshold editing ───────────────────────────────────────────────
+
+    let _activeInput = null;
+
+    function startEdit(cell) {
+      if (_activeInput) cancelEdit();
+
+      const currentValue = cell.dataset.value;
+      const metricId     = cell.dataset.metric;
+      const comparison   = cell.dataset.comparison;
+
+      cell.innerHTML = `
+        <input type="number" min="0.1" max="100" step="0.1"
+               value="${currentValue}"
+               class="w-[72px] px-2 py-1 text-sm text-center
+                      border-2 border-indigo-500 rounded-lg bg-white
+                      outline-none focus:ring-0 tabular-nums"
+               onkeydown="handleEditKey(event, this)"
+               onblur="commitEdit(this)">`;
+
+      const input = cell.querySelector('input');
+      input._cell          = cell;
+      input._metricId      = metricId;
+      input._comparison    = comparison;
+      input._originalValue = currentValue;
+
+      input.select();
+      _activeInput = input;
+    }
+
+    function cancelEdit() {
+      if (!_activeInput) return;
+      const input = _activeInput;
+      _activeInput = null;
+      restoreCell(input._cell, input._originalValue);
+    }
+
+    function restoreCell(cell, value) {
+      cell.innerHTML      = `${parseFloat(value).toFixed(1)}%`;
+      cell.dataset.value  = value;
+    }
+
+    async function restartMimir() {
+      const btn   = document.getElementById('restart-btn');
+      const label = document.getElementById('restart-label');
+      const icon  = document.getElementById('restart-icon');
+      btn.disabled = true;
+      label.textContent = 'Restarting…';
+      icon.style.animation = 'spin 1s linear infinite';
+      try {
+        const r = await fetch('/admin/reset', { method: 'POST' });
+        if (r.ok) {
+          label.textContent = 'Done!';
+          icon.style.animation = '';
+          setTimeout(() => { label.textContent = 'Restart Mimir'; btn.disabled = false; }, 3000);
+        } else {
+          label.textContent = 'Error';
+          icon.style.animation = '';
+          setTimeout(() => { label.textContent = 'Restart Mimir'; btn.disabled = false; }, 3000);
+        }
+      } catch {
+        label.textContent = 'Offline';
+        icon.style.animation = '';
+        setTimeout(() => { label.textContent = 'Restart Mimir'; btn.disabled = false; }, 3000);
+      }
+    }
+
+    function handleEditKey(e, input) {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        input.blur();
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        _activeInput = null;
+        restoreCell(input._cell, input._originalValue);
+      }
+    }
+
+    async function commitEdit(input) {
+      if (_activeInput !== input) return; // already cancelled via Escape
+      _activeInput = null;
+
+      const newValue     = parseFloat(input.value);
+      const cell         = input._cell;
+      const metricId     = input._metricId;
+      const comparison   = input._comparison;
+      const originalValue = input._originalValue;
+
+      if (isNaN(newValue) || newValue <= 0 || newValue > 100) {
+        restoreCell(cell, originalValue);
+        showToast('Value must be between 0.1 and 100 (%)', true);
+        return;
+      }
+
+      // No change
+      if (Math.abs(newValue - parseFloat(originalValue)) < 0.005) {
+        restoreCell(cell, originalValue);
+        return;
+      }
+
+      // Saving state
+      cell.innerHTML = `<span class="text-indigo-400 animate-pulse">${newValue.toFixed(1)}%</span>`;
+
+      try {
+        const resp = await fetch(`/api/metrics/${encodeURIComponent(metricId)}/threshold`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comparison, value: newValue }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+
+        cell.dataset.value = newValue;
+        restoreCell(cell, newValue);
+
+        // Brief green flash
+        cell.style.background  = '#1a2d25';
+        cell.style.color       = '#34d399';
+        cell.style.borderColor = '#1e3d30';
+        setTimeout(() => {
+          cell.style.background  = '#13151a';
+          cell.style.color       = '#9aa0b4';
+          cell.style.borderColor = '#2a2d38';
+        }, 1600);
+
+        showToast(`${comparison.toUpperCase()} threshold → ${newValue.toFixed(1)}%`);
+        showChangeBanner();
+
+      } catch (err) {
+        restoreCell(cell, originalValue);
+        showToast(`Failed to save: ${err.message}`, true);
+      }
+    }
+
+
+    // ── Status toggle ──────────────────────────────────────────────────────────
+
+    async function toggleMetric(metricId, enabled, checkbox) {
+      checkbox.disabled = true;
+      const track = document.getElementById(`toggle-track-${metricId}`);
+      const thumb = document.getElementById(`toggle-thumb-${metricId}`);
+      const row   = checkbox.closest('tr');
+
+      try {
+        const resp = await fetch(`/api/metrics/${encodeURIComponent(metricId)}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+
+        if (track) track.style.background = enabled ? '#4f46e5' : '#2a2d38';
+        if (thumb) thumb.style.left       = enabled ? '22px' : '2px';
+        row.dataset.enabled = enabled ? 'active' : 'inactive';
+        showToast(`Metric ${enabled ? 'enabled' : 'disabled'}`);
+        showChangeBanner();
+
+      } catch (err) {
+        checkbox.checked = !enabled; // revert toggle
+        showToast(`Failed: ${err.message}`, true);
+      } finally {
+        checkbox.disabled = false;
+      }
+    }
+
+
+    // ── Bulk selection ─────────────────────────────────────────────────────────
+
+    function _visibleCheckboxes() {
+      return Array.from(document.querySelectorAll('#table-body tr:not(.hidden) .row-cb'));
+    }
+
+    function onRowCheck() {
+      const all = _visibleCheckboxes();
+      const checked = all.filter(cb => cb.checked);
+      document.getElementById('select-all-cb').indeterminate = checked.length > 0 && checked.length < all.length;
+      document.getElementById('select-all-cb').checked = checked.length === all.length && all.length > 0;
+      _updateBulkBar(checked.length);
+    }
+
+    function toggleSelectAll(masterCb) {
+      _visibleCheckboxes().forEach(cb => cb.checked = masterCb.checked);
+      _updateBulkBar(masterCb.checked ? _visibleCheckboxes().length : 0);
+    }
+
+    function clearSelection() {
+      document.querySelectorAll('.row-cb').forEach(cb => cb.checked = false);
+      const masterCb = document.getElementById('select-all-cb');
+      masterCb.checked = false;
+      masterCb.indeterminate = false;
+      _updateBulkBar(0);
+    }
+
+    function _updateBulkBar(count) {
+      const bar = document.getElementById('bulk-bar');
+      const hint = document.getElementById('bulk-hint');
+      document.getElementById('bulk-label').textContent = `${count} selected`;
+      document.getElementById('bulk-count').textContent = count;
+      bar.classList.toggle('hidden', count === 0);
+      if (hint) hint.classList.toggle('hidden', count > 0);
+    }
+
+    async function applyBulk() {
+      const metricIds = Array.from(document.querySelectorAll('.row-cb:checked')).map(cb => cb.dataset.metric);
+      if (!metricIds.length) return;
+
+      const values = {};
+      for (const comp of ['pace', 'dod', 'wow']) {
+        const raw = document.getElementById(`bulk-${comp}`).value.trim();
+        if (raw !== '') {
+          const n = parseFloat(raw);
+          if (!isNaN(n) && n > 0 && n <= 100) values[comp] = n;
+        }
+      }
+      if (!Object.keys(values).length) {
+        showToast('Enter at least one threshold value.', true);
+        return;
+      }
+
+      const btn = document.getElementById('bulk-apply-btn');
+      btn.disabled = true;
+      btn.textContent = 'Saving…';
+
+      try {
+        const resp = await fetch('/api/metrics/bulk-threshold', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metric_ids: metricIds, values }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        // Update cells in the table
+        for (const mid of metricIds) {
+          for (const [comp, val] of Object.entries(values)) {
+            const cell = document.querySelector(`.threshold-cell[data-metric="${mid}"][data-comparison="${comp}"]`);
+            if (cell) {
+              cell.textContent = `${val.toFixed(1)}%`;
+              cell.dataset.value = val;
+            }
+          }
+        }
+        showToast(`Updated ${metricIds.length} metrics`);
+        showChangeBanner();
+        // Clear inputs
+        for (const comp of ['pace', 'dod', 'wow']) document.getElementById(`bulk-${comp}`).value = '';
+        clearSelection();
+      } catch (err) {
+        showToast(`Error: ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = 'Apply to <span id="bulk-count">0</span> metrics';
+      }
+    }
+
+
+    // ── Search & filter ────────────────────────────────────────────────────────
+
+    function filterTable() {
+      const query     = document.getElementById('search-input').value.toLowerCase().trim();
+      const direction = document.getElementById('filter-direction').value;
+      const status    = document.getElementById('filter-status').value;
+      const rows      = document.querySelectorAll('#table-body tr');
+
+      let visible = 0;
+      rows.forEach(row => {
+        const matchLabel  = !query     || row.dataset.label.includes(query);
+        const matchDir    = !direction || row.dataset.direction === direction;
+        const matchStatus = !status    || row.dataset.enabled   === status;
+        const show        = matchLabel && matchDir && matchStatus;
+
+        row.classList.toggle('hidden', !show);
+        if (!show) {
+          const cb = row.querySelector('.row-cb');
+          if (cb) cb.checked = false;
+        }
+        if (show) visible++;
+      });
+
+      document.getElementById('row-count').textContent   = `${visible} of ${rows.length}`;
+      document.getElementById('empty-state').classList.toggle('hidden', visible > 0);
+      // refresh bulk bar after filter
+      onRowCheck();
+    }
+
+    // Init on load
+    filterTable();
+
+    // Hover effects for threshold cells
+    document.querySelectorAll('.threshold-cell').forEach(cell => {
+      cell.addEventListener('mouseenter', () => {
+        if (!cell.querySelector('input')) {
+          cell.style.background   = '#1e2230';
+          cell.style.color        = '#818cf8';
+          cell.style.borderColor  = '#3a3f5c';
+        }
+      });
+      cell.addEventListener('mouseleave', () => {
+        if (!cell.querySelector('input')) {
+          cell.style.background   = '#13151a';
+          cell.style.color        = '#9aa0b4';
+          cell.style.borderColor  = '#2a2d38';
+        }
+      });
+    });
+
+    // Initialise sort icon colours on load
+    document.querySelectorAll('.sort-icon').forEach(svg => { svg.style.color = '#fbbf24'; });
+
+    // ── Tooltips ───────────────────────────────────────────────────────────────
+    const tooltipBox = document.createElement('div');
+    tooltipBox.className = 'tooltip-box';
+    tooltipBox.style.display = 'none';
+    document.body.appendChild(tooltipBox);
+
+    document.querySelectorAll('.tooltip-icon').forEach(icon => {
+      icon.addEventListener('mouseenter', (e) => {
+        tooltipBox.textContent = icon.dataset.tip;
+        tooltipBox.style.display = 'block';
+      });
+      icon.addEventListener('mousemove', (e) => {
+        tooltipBox.style.left = (e.clientX + 12) + 'px';
+        tooltipBox.style.top  = (e.clientY + 12) + 'px';
+      });
+      icon.addEventListener('mouseleave', () => {
+        tooltipBox.style.display = 'none';
+      });
+    });
+
+
+    // ── Sortable columns ───────────────────────────────────────────────────────
+
+    let _sortCol = null;
+    let _sortAsc = true;
+
+    function sortTable(col) {
+      if (_sortCol === col) {
+        _sortAsc = !_sortAsc;
+      } else {
+        _sortCol = col;
+        _sortAsc = true;
+      }
+      const tbody = document.getElementById('table-body');
+      const rows  = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort((a, b) => {
+        let va, vb;
+        switch (col) {
+          case 'label':
+            va = a.dataset.label || ''; vb = b.dataset.label || '';
+            return _sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+          case 'direction':
+            va = a.dataset.direction || ''; vb = b.dataset.direction || '';
+            return _sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+          case 'pace': case 'dod': case 'wow':
+            va = parseFloat(a.querySelector(`[data-comparison="${col}"]`)?.dataset.value ?? 0);
+            vb = parseFloat(b.querySelector(`[data-comparison="${col}"]`)?.dataset.value ?? 0);
+            return _sortAsc ? va - vb : vb - va;
+          case 'status':
+            va = a.dataset.enabled || ''; vb = b.dataset.enabled || '';
+            return _sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+          case 'updated':
+            va = a.dataset.updated || ''; vb = b.dataset.updated || '';
+            return _sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+          default: return 0;
+        }
+      });
+      rows.forEach(row => tbody.appendChild(row));
+      document.querySelectorAll('[data-sortcol]').forEach(th => {
+        const svg  = th.querySelector('.sort-icon');
+        const path = th.querySelector('.sort-path');
+        if (!svg || !path) return;
+        if (th.dataset.sortcol === col) {
+          path.setAttribute('d', _sortAsc ? 'M5 15l7-7 7 7' : 'M19 9l-7 7-7-7');
+          svg.style.color = '#818cf8';
+        } else {
+          path.setAttribute('d', 'M8 9l4-4 4 4M8 15l4 4 4-4');
+          svg.style.color = '#fbbf24';
+        }
+      });
+    }
+
+
+    // ── Direction toggle ───────────────────────────────────────────────────────
+
+    async function toggleDirection(badge) {
+      const metricId = badge.dataset.metric;
+      const current  = badge.dataset.direction;
+      const next     = current === 'alert_on_rise' ? 'alert_on_drop' : 'alert_on_rise';
+
+      badge.style.opacity       = '0.5';
+      badge.style.pointerEvents = 'none';
+
+      try {
+        const resp = await fetch(`/api/metrics/${encodeURIComponent(metricId)}/direction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ direction: next }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        badge.dataset.direction = next;
+        badge.closest('tr').dataset.direction = next;
+        const arrow = badge.querySelector('.direction-arrow path');
+        const label = badge.querySelector('.badge-label');
+        if (next === 'alert_on_rise') {
+          badge.style.background = '#2d1d20';
+          badge.style.color      = '#f87171';
+          badge.style.border     = '1px solid #3d2022';
+          if (arrow) arrow.setAttribute('d', 'M5 15l7-7 7 7');
+          if (label) label.textContent = 'Rise alert';
+        } else {
+          badge.style.background = '#1a1f35';
+          badge.style.color      = '#818cf8';
+          badge.style.border     = '1px solid #252b45';
+          if (arrow) arrow.setAttribute('d', 'M19 9l-7 7-7-7');
+          if (label) label.textContent = 'Drop alert';
+        }
+        filterTable();
+        showToast(`Direction → ${next === 'alert_on_rise' ? 'Rise alert' : 'Drop alert'}`);
+        showChangeBanner();
+      } catch (err) {
+        showToast(`Failed: ${err.message}`, true);
+      } finally {
+        badge.style.opacity       = '1';
+        badge.style.pointerEvents = '';
+      }
+    }
+
+
+    // ── Relative dates ─────────────────────────────────────────────────────────
+
+    function _relativeDate(dateStr) {
+      if (!dateStr) return '—';
+      const then = new Date(dateStr + 'T00:00:00');
+      const now  = new Date(); now.setHours(0, 0, 0, 0);
+      const days = Math.round((now - then) / 86400000);
+      if (days === 0)  return 'Today';
+      if (days === 1)  return 'Yesterday';
+      if (days <  7)  return `${days} days ago`;
+      if (days < 14)  return '1 week ago';
+      if (days < 30)  return `${Math.floor(days / 7)} weeks ago`;
+      if (days < 60)  return '1 month ago';
+      return `${Math.floor(days / 30)} months ago`;
+    }
+
+    document.querySelectorAll('.relative-date').forEach(el => {
+      const d = el.dataset.date;
+      el.title       = d || '';
+      el.textContent = _relativeDate(d);
+    });
+
+  </script>
+
+</body>
+</html>

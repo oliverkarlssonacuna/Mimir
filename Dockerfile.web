@@ -1,0 +1,24 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY pyproject.toml .
+COPY src/ ./src/
+COPY templates/ ./templates/
+COPY static/ ./static/
+
+RUN pip install --no-cache-dir \
+    fastapi \
+    "uvicorn[standard]" \
+    authlib \
+    httpx \
+    jinja2 \
+    python-multipart \
+    itsdangerous \
+    google-cloud-bigquery \
+    python-dotenv \
+    requests
+
+ENV PYTHONPATH=/app/src
+
+CMD ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8080"]

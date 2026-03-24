@@ -1,6 +1,7 @@
 # Hemligheter – får ALDRIG laddas upp
 .env
 
+
 # Python
 venv/
 __pycache__/

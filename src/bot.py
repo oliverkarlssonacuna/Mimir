@@ -18,10 +18,11 @@ import sys
 import discord
 from discord import app_commands
 from discord.ext import tasks
+from aiohttp import web as aiohttp_web
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
-from config import Config, MONITORED_METRICS
+from config import Config, THRESHOLDS
 from bq_client import BQClient
 from steep_client import SteepClient
 from detector import Detector, Anomaly
@@ -57,6 +58,9 @@ _alerted_keys: set[tuple[str, str, str]] = set()
 
 # Thread ID → metric info for follow-up questions
 _thread_metrics: dict[int, dict] = {}
+
+# metric_id → list[Anomaly], for use in deep analysis button
+_pending_anomalies: dict[str, list["Anomaly"]] = {}
 
 # Thread ID → asyncio.Task for auto-close timer
 _thread_timers: dict[int, asyncio.Task] = {}
@@ -94,19 +98,18 @@ def _reset_thread_timer(thread_id: int):
 bq = BQClient(project_id=Config.GCP_PROJECT_ID, max_rows=Config.MAX_QUERY_ROWS)
 steep = SteepClient(api_key=Config.STEEP_API_TOKEN)
 detector = Detector(steep=steep, bq=bq)
-agent = Agent(config=Config, bq_client=bq, steep_client=steep)
+percent_metric_ids = {m["metric_id"] for m in detector._metric_configs if m.get("display_format") == "percent"}
+agent = Agent(config=Config, bq_client=bq, steep_client=steep, percent_metric_ids=percent_metric_ids)
 
 
-# ── Severity helpers ──────────────────────────────────────────────────────────
+# ── Alert color/emoji ────────────────────────────────────────────────────────
 
-def _severity_color(anomaly: Anomaly) -> discord.Color:
-    if anomaly.severity == "critical":
-        return discord.Color.red()
-    return discord.Color.orange()
+def _alert_color(anomaly: Anomaly) -> discord.Color:
+    return discord.Color.red()
 
 
-def _severity_emoji(anomaly: Anomaly) -> str:
-    return "🚨" if anomaly.severity == "critical" else "⚠️"
+def _alert_emoji(anomaly: Anomaly) -> str:
+    return "🚨"
 
 
 def _comparison_label(comp: str) -> str:
@@ -115,19 +118,18 @@ def _comparison_label(comp: str) -> str:
 
 # ── Button view for anomaly alerts ────────────────────────────────────────────
 
-class AnomalyView(discord.ui.View):
-    """Buttons posted with each anomaly alert."""
+class GroupedAnomalyView(discord.ui.View):
+    """Buttons for a grouped (per-metric) anomaly alert."""
 
-    def __init__(self, anomaly: Anomaly):
+    def __init__(self, metric_id: str, reference_date: str):
         super().__init__(timeout=None)
-        key = f"{anomaly.metric_id}:{anomaly.comparison}"
         self.add_item(discord.ui.Button(
             label="Deep analysis", style=discord.ButtonStyle.primary, emoji="📊",
-            custom_id=f"analyse:{key}",
+            custom_id=f"analyse:{metric_id}:{reference_date}",
         ))
         self.add_item(discord.ui.Button(
             label="Handled", style=discord.ButtonStyle.success, emoji="✅",
-            custom_id=f"handled:{key}",
+            custom_id=f"handled:{metric_id}:{reference_date}",
         ))
 
 
@@ -144,13 +146,40 @@ tree = app_commands.CommandTree(bot)
 async def status(interaction: discord.Interaction):
     await interaction.response.defer(thinking=True)
 
+    total_metrics = len(detector._metric_configs)
+    progress_msg = await interaction.followup.send(
+        f"⏳ Checking metrics... `0/{total_metrics}` {'░' * 20}",
+        wait=True,
+    )
+
+    loop = asyncio.get_running_loop()
+
+    def make_progress_bar(current: int, total: int) -> str:
+        filled = int(20 * current / total) if total else 0
+        bar = '█' * filled + '░' * (20 - filled)
+        pct = int(100 * current / total) if total else 0
+        return f"⏳ Checking metrics... `{current}/{total}` `{bar}` {pct}%"
+
+    last_update = [0]
+
+    def on_progress(current: int, total: int, label: str):
+        # Update every 5 metrics to avoid Discord rate limits on edits
+        if current - last_update[0] >= 5 or current == total:
+            last_update[0] = current
+            text = make_progress_bar(current, total)
+            asyncio.run_coroutine_threadsafe(
+                progress_msg.edit(content=text), loop
+            )
+
     try:
-        anomalies = await asyncio.get_running_loop().run_in_executor(
-            None, detector.collect_and_check
+        anomalies = await loop.run_in_executor(
+            None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
-        await interaction.followup.send(f"Error during check: {e}")
+        await progress_msg.edit(content=f"❌ Error during check: {e}")
         return
+
+    await progress_msg.edit(content=f"✅ Done — checked `{total_metrics}` metrics.")
 
     if not anomalies:
         embed = discord.Embed(
@@ -159,79 +188,158 @@ async def status(interaction: discord.Interaction):
             color=discord.Color.green(),
         )
         # Add current values summary
-        lines = []
-        for m in MONITORED_METRICS:
-            try:
-                val, _ = detector._fetch_today_value(m["id"])
-                if val is not None:
-                    lines.append(f"**{m['label']}**: {val:,.1f}")
-            except Exception:
-                pass
+        def _get_current_values():
+            result = []
+            for m in detector._metric_configs:
+                try:
+                    val, _ = detector._fetch_today_value(m["metric_id"])
+                    if val is not None:
+                        result.append(f"**{m['metric_label']}**: {val:,.1f}")
+                except Exception:
+                    pass
+            return result
+
+        loop = asyncio.get_running_loop()
+        lines = await loop.run_in_executor(None, _get_current_values)
         if lines:
             embed.add_field(name="Current values (today)", value="\n".join(lines), inline=False)
         await interaction.followup.send(embed=embed)
         return
 
+    grouped = _group_anomalies(anomalies)
     await interaction.followup.send(
-        f"⚠️ **{len(anomalies)} anomal{'ies' if len(anomalies) > 1 else 'y'} detected:**"
+        f"⚠️ **{len(grouped)} metric{'s' if len(grouped) > 1 else ''} with anomalies ({len(anomalies)} checks triggered):**"
     )
-    for anomaly in anomalies:
-        embed = _build_anomaly_embed(anomaly)
-        view = AnomalyView(anomaly)
+    for metric_anomalies in grouped.values():
+        embed = _build_grouped_embed(metric_anomalies)
+        view = GroupedAnomalyView(metric_anomalies[0].metric_id, metric_anomalies[0].reference_date)
         await interaction.followup.send(embed=embed, view=view)
 
 
-def _build_anomaly_embed(anomaly: Anomaly) -> discord.Embed:
-    """Build a Discord embed for an anomaly."""
-    emoji = _severity_emoji(anomaly)
-    title = f"{emoji} {anomaly.severity.upper()}: {anomaly.metric_label}"
+@tree.command(name="admin", description="Open the Mimir admin panel")
+async def admin_link(interaction: discord.Interaction):
+    view = discord.ui.View()
+    view.add_item(discord.ui.Button(
+        label="Open Admin Panel",
+        url=Config.ADMIN_URL,
+        style=discord.ButtonStyle.link,
+        emoji="⚙️",
+    ))
+    await interaction.response.send_message("🔧 Mimir admin panel:", view=view, ephemeral=True)
 
-    embed = discord.Embed(title=title, color=_severity_color(anomaly))
-    embed.add_field(
-        name="Change",
-        value=f"`{anomaly.change_pct:+.1%}`",
-        inline=True,
+
+def _group_anomalies(anomalies: list[Anomaly]) -> dict[str, list[Anomaly]]:
+    """Group a list of anomalies by metric_id, preserving order."""
+    grouped: dict[str, list[Anomaly]] = {}
+    for a in anomalies:
+        grouped.setdefault(a.metric_id, []).append(a)
+    return grouped
+
+
+def _fmt_date_short(date_str: str) -> str:
+    """Format YYYY-MM-DD as 'Mar 15'."""
+    try:
+        from datetime import datetime as _dt
+        return _dt.strptime(date_str, "%Y-%m-%d").strftime("%b %-d")
+    except Exception:
+        return date_str
+
+
+def _build_grouped_embed(anomalies: list[Anomaly]) -> discord.Embed:
+    """Build a single Discord embed combining all anomalies for one metric."""
+    from datetime import datetime as _dt
+    label = anomalies[0].metric_label
+    is_drop = anomalies[0].change_pct < 0
+    dir_emoji = "📉" if is_drop else "📈"
+
+    embed = discord.Embed(
+        title=f"🚨 {label}",
+        color=discord.Color.red(),
+        timestamp=_dt.utcnow(),
     )
-    embed.add_field(
-        name="Comparison",
-        value=_comparison_label(anomaly.comparison),
-        inline=True,
-    )
-    embed.add_field(
-        name="Current → Baseline",
-        value=f"{anomaly.current_value:,.1f} → {anomaly.baseline_value:,.1f}",
-        inline=False,
-    )
+
+    for a in anomalies:
+        trend = "📉" if a.change_pct < 0 else "📈"
+        base_short = _fmt_date_short(a.baseline_date) if a.baseline_date else ""
+
+        # Always show relative % change (same as the threshold)
+        change_str = f"{a.change_pct:+.1%}"
+
+        # Format raw values — percent-format metrics shown as XX.XX%
+        if a.display_format == "percent":
+            cur_str = f"{a.current_value * 100:.2f}%"
+            base_str = f"{a.baseline_value * 100:.2f}%"
+        else:
+            cur_str = f"{a.current_value:,.1f}"
+            base_str = f"{a.baseline_value:,.1f}"
+
+        # Human-readable labels depending on comparison type
+        if a.comparison == "pace":
+            cur_label = f"Today so far"
+            base_label = f"Same day last week ({base_short})" if base_short else "Same day last week"
+        elif a.comparison == "dod":
+            cur_label = f"Yesterday ({_fmt_date_short(a.reference_date)})"
+            base_label = f"Day before ({base_short})" if base_short else "Day before"
+        else:  # wow
+            cur_label = f"Yesterday ({_fmt_date_short(a.reference_date)})"
+            base_label = f"Same day last week ({base_short})" if base_short else "Same day last week"
+
+        field_value = (
+            f"{trend} **{change_str}**\n"
+            f"{cur_label}: **{cur_str}**\n"
+            f"{base_label}: {base_str}"
+        )
+        embed.add_field(
+            name=f"{_comparison_label(a.comparison)}",
+            value=field_value,
+            inline=True,
+        )
+
+    if anomalies[0].steep_url:
+        embed.add_field(name="\u200b", value=f"[🔗 View in Steep]({anomalies[0].steep_url})", inline=True)
+
+    embed.set_footer(text="Mimir — Anomaly Monitor")
     return embed
 
 
 # ── Alert sending (called from monitor) ──────────────────────────────────────
 
-async def send_anomaly_alert(channel: discord.TextChannel, anomaly: Anomaly):
-    """Send an anomaly alert with Gemini summary."""
-    embed = _build_anomaly_embed(anomaly)
+async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: list[Anomaly]):
+    """Send a single grouped alert covering all triggered checks for one metric."""
+    embed = _build_grouped_embed(anomalies)
 
-    # Quick Gemini summary
+    # Build combined analysis summary
     try:
-        today = datetime.now().strftime("%Y-%m-%d")
-        prompt = (
-            f"Today's date: {today}\n"
-            f"An anomaly has been detected:\n"
-            f"Metric: {anomaly.metric_label} (id: {anomaly.metric_id})\n"
-            f"Change: {anomaly.change_pct:+.1%} ({_comparison_label(anomaly.comparison)})\n"
-            f"Current: {anomaly.current_value:,.1f}, Baseline: {anomaly.baseline_value:,.1f}\n"
-            f"Direction: {anomaly.direction}\n\n"
-            "Give a brief summary (max 3 sentences) of what might be causing this and a recommendation. "
-            "Fetch the last 7 days of data with query_steep_metric for context."
-        )
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(None, agent.ask, prompt)
-        if response.text:
-            embed.add_field(name="Analysis", value=response.text[:1024], inline=False)
-    except Exception as e:
-        logger.warning("Gemini summary failed: %s", e)
+        parts = []
+        for a in anomalies:
+            comp_label = _comparison_label(a.comparison)
+            if a.display_format == "percent":
+                cur_fmt = f"{a.current_value * 100:.2f}%"
+                base_fmt = f"{a.baseline_value * 100:.2f}%"
+            else:
+                cur_fmt = f"{a.current_value:,.1f}"
+                base_fmt = f"{a.baseline_value:,.1f}"
+            parts.append(f"{comp_label}: {a.change_pct:+.1%} ({base_fmt} → {cur_fmt})")
 
-    view = AnomalyView(anomaly)
+        change_summary = " | ".join(parts)
+
+        loop = asyncio.get_running_loop()
+        ref_date = datetime.strptime(anomalies[0].reference_date, "%Y-%m-%d").date()
+        releases = await loop.run_in_executor(
+            None, lambda: jira_client.get_releases_near_date(ref_date, Config.JIRA_PROJECT_KEY)
+        )
+        release_note = ""
+        if releases:
+            release_names = ", ".join(r.get("name", "") for r in releases[:2])
+            release_note = f" This coincides with release(s): {release_names}."
+
+        analysis = f"{anomalies[0].metric_label}: {change_summary}.{release_note} Investigate further to confirm the cause."
+        embed.add_field(name="Analysis", value=analysis, inline=False)
+    except Exception as e:
+        logger.warning("Analysis summary failed: %s", e)
+
+    _pending_anomalies[anomalies[0].metric_id] = anomalies
+    view = GroupedAnomalyView(anomalies[0].metric_id, anomalies[0].reference_date)
     await channel.send(embed=embed, view=view)
 
 
@@ -250,15 +358,37 @@ async def monitor_loop():
         logger.error("Alert channel %s not found", alert_channel_id)
         return
 
+    total_metrics = len(detector._metric_configs)
+    progress_msg = await channel.send(f"⏳ Checking metrics... `0/{total_metrics}` {'░' * 20}")
+
+    loop = asyncio.get_running_loop()
+    last_update = [0]
+
+    def make_bar(current: int, total: int) -> str:
+        filled = int(20 * current / total) if total else 0
+        bar = '█' * filled + '░' * (20 - filled)
+        pct = int(100 * current / total) if total else 0
+        return f"⏳ Checking metrics... `{current}/{total}` `{bar}` {pct}%"
+
+    def on_progress(current: int, total: int, label: str):
+        if current - last_update[0] >= 5 or current == total:
+            last_update[0] = current
+            asyncio.run_coroutine_threadsafe(
+                progress_msg.edit(content=make_bar(current, total)), loop
+            )
+
     try:
-        loop = asyncio.get_running_loop()
-        anomalies = await loop.run_in_executor(None, detector.collect_and_check)
+        anomalies = await loop.run_in_executor(
+            None, lambda: detector.collect_and_check(progress_callback=on_progress)
+        )
     except Exception as e:
         logger.error("Monitor check failed: %s", e)
+        await progress_msg.edit(content=f"❌ Check failed: {e}")
         return
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
+        await progress_msg.edit(content=f"✅ All clear — checked `{total_metrics}` metrics, no anomalies detected.")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -273,13 +403,14 @@ async def monitor_loop():
         logger.info("Monitor: anomalies exist but already alerted today.")
         return
 
-    for anomaly in new_anomalies:
+    grouped = _group_anomalies(new_anomalies)
+    for metric_anomalies in grouped.values():
         try:
-            await send_anomaly_alert(channel, anomaly)
+            await send_grouped_anomaly_alert(channel, metric_anomalies)
         except discord.DiscordServerError as e:
-            logger.warning("Discord server error sending alert for %s: %s", anomaly.metric_label, e)
+            logger.warning("Discord server error sending alert for %s: %s", metric_anomalies[0].metric_label, e)
         except Exception as e:
-            logger.error("Failed to send alert for %s: %s", anomaly.metric_label, e)
+            logger.error("Failed to send alert for %s: %s", metric_anomalies[0].metric_label, e)
 
 
 MAX_HISTORY_MESSAGES = 10
@@ -293,9 +424,6 @@ async def _get_thread_history(thread: discord.Thread, skip_message_id: int = 0) 
             continue
         role = "Bot" if msg.author.bot else "User"
         text = msg.content.strip() if msg.content else ""
-        has_image = any(a.content_type and a.content_type.startswith("image/") for a in msg.attachments)
-        if has_image:
-            text = (text + " [bifogad graf]") if text else "[bifogad graf]"
         if text:
             messages.append(f"{role}: {text}")
         if len(messages) >= MAX_HISTORY_MESSAGES:
@@ -327,7 +455,7 @@ async def on_message(message: discord.Message):
 
         prompt = (
             f"Today's date: {today}\n"
-            f"Metric: {metric_info['label']} (id: {metric_info['metric_id']})\n"
+            f"Metric: {metric_info["metric_label"]} (id: {metric_info['metric_id']})\n"
             f"Direction: {metric_info['direction']}\n"
         )
         if metric_info.get("anomaly_desc"):
@@ -342,9 +470,20 @@ async def on_message(message: discord.Message):
                 None, lambda: agent.ask(prompt, system_prompt=THREAD_SYSTEM_PROMPT)
             )
 
+            logger.info(
+                "Thread follow-up response: chart_path=%s text_len=%d",
+                response.chart_path, len(response.text or ""),
+            )
+
+            if response.chart_path:
+                if not os.path.exists(response.chart_path):
+                    logger.error("Chart file missing before send: %s", response.chart_path)
+                    response = type(response)(text=response.text, chart_path=None)
+
             if response.chart_path:
                 text = response.text or "Here is the result:"
                 chunks = split_message(text)
+                logger.info("Sending chart to thread %d", message.channel.id)
                 await message.channel.send(
                     content=chunks[0],
                     file=discord.File(response.chart_path, filename="chart.png"),
@@ -356,17 +495,73 @@ async def on_message(message: discord.Message):
                 except OSError:
                     pass
             else:
-                for chunk in split_message(response.text):
+                for chunk in split_message(response.text or "No response generated."):
                     await message.channel.send(content=chunk)
         except Exception as e:
-            logger.error("Thread follow-up failed: %s", e)
+            logger.error("Thread follow-up failed: %s", e, exc_info=True)
             await message.channel.send(f"Something went wrong: {e}")
+
+
+async def _start_internal_server():
+    """Small HTTP server so the admin web UI can trigger a config reload."""
+    async def handle_reload(request: aiohttp_web.Request) -> aiohttp_web.Response:
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, detector.reload_configs)
+        count = len(detector._metric_configs)
+        logger.info("Internal reload triggered via HTTP: %d metrics loaded.", count)
+        return aiohttp_web.Response(
+            text=f'{{"ok": true, "count": {count}}}',
+            content_type="application/json",
+        )
+
+    async def handle_reset(request: aiohttp_web.Request) -> aiohttp_web.Response:
+        global _alerted_keys
+        _alerted_keys.clear()
+        loop = asyncio.get_running_loop()
+        await loop.run_in_executor(None, detector.reload_configs)
+        count = len(detector._metric_configs)
+        monitor_loop.restart()
+        logger.info("Internal reset triggered: %d metrics, _alerted_keys cleared, monitor restarted.", count)
+        return aiohttp_web.Response(
+            text=f'{{"ok": true, "count": {count}}}',
+            content_type="application/json",
+        )
+
+    async def handle_status(request: aiohttp_web.Request) -> aiohttp_web.Response:
+        import datetime, json as _json
+        interval = Config.MONITOR_INTERVAL_SECONDS
+        next_iter = monitor_loop.next_iteration  # datetime | None
+        if next_iter is not None:
+            now = datetime.datetime.now(datetime.timezone.utc)
+            secs = max(0, int((next_iter - now).total_seconds()))
+        else:
+            secs = None
+        return aiohttp_web.Response(
+            text=_json.dumps({
+                "running": monitor_loop.is_running(),
+                "interval_seconds": interval,
+                "seconds_until_next_run": secs,
+            }),
+            content_type="application/json",
+        )
+
+    internal_app = aiohttp_web.Application()
+    internal_app.router.add_post("/internal/reload", handle_reload)
+    internal_app.router.add_post("/internal/reset", handle_reset)
+    internal_app.router.add_get("/internal/status", handle_status)
+    runner = aiohttp_web.AppRunner(internal_app)
+    await runner.setup()
+    site = aiohttp_web.TCPSite(runner, "0.0.0.0", Config.BOT_INTERNAL_PORT)
+    await site.start()
+    logger.info("Internal HTTP server listening on port %d", Config.BOT_INTERNAL_PORT)
 
 
 @bot.event
 async def on_ready():
-    await tree.sync()
+    synced = await tree.sync()
+    logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
+    await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
 
@@ -382,19 +577,17 @@ async def on_interaction(interaction: discord.Interaction):
 
 
 async def _handle_button(interaction: discord.Interaction, custom_id: str):
+    # analyse custom_id format: "analyse:metric_id:reference_date"
+    # handled custom_id format:  "handled:metric_id:reference_date"
     parts = custom_id.split(":", 2)
     if len(parts) < 2:
         return
     action = parts[0]
-    key = parts[1] if len(parts) > 1 else ""
-
-    # key format: "metric_id:comparison"
-    key_parts = key.split(":", 1)
-    metric_id = key_parts[0] if key_parts else ""
-    comparison = key_parts[1] if len(key_parts) > 1 else ""
+    metric_id = parts[1] if len(parts) > 1 else ""
+    reference_date = parts[2] if len(parts) > 2 else datetime.now().strftime("%Y-%m-%d")
 
     # Find metric info
-    metric_info = next((m for m in MONITORED_METRICS if m["id"] == metric_id), None)
+    metric_info = next((m for m in detector._metric_configs if m["metric_id"] == metric_id), None)
 
     if action == "analyse" and metric_info:
         await interaction.response.defer(thinking=True)
@@ -421,19 +614,45 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
         # Create analysis thread
         try:
-            msg = await interaction.followup.send(
-                content=f"📊 Opening analysis thread for **{metric_info['label']}**…", wait=True
-            )
+            steep_url = metric_info.get("steep_url")
+            msg = await interaction.followup.send(content=f"📊 Analysing **{metric_info['metric_label']}**…", wait=True)
             channel = interaction.channel
             real_msg = await channel.fetch_message(msg.id)
             thread = await real_msg.create_thread(
-                name=f"Analysis: {metric_info['label']}", auto_archive_duration=60
+                name=f"Analysis: {metric_info['metric_label']}", auto_archive_duration=60
             )
+
+            # Build combined context from all pending anomalies for this metric
+            saved_anomalies = _pending_anomalies.get(metric_id, [])
+            anomaly_parts = []
+            ref_dt = datetime.strptime(reference_date, "%Y-%m-%d").date()
+            baseline_date = ""    # WoW baseline — only set if WoW actually triggered
+            baseline_date_2 = ""  # DoD baseline — only set if DoD actually triggered
+            for sa in saved_anomalies:
+                comp_label = _comparison_label(sa.comparison)
+                if sa.display_format == "percent":
+                    cur_fmt = f"{sa.current_value * 100:.2f}%"
+                    base_fmt = f"{sa.baseline_value * 100:.2f}%"
+                else:
+                    cur_fmt = f"{sa.current_value:,.1f}"
+                    base_fmt = f"{sa.baseline_value:,.1f}"
+                anomaly_parts.append(f"{comp_label}: {sa.change_pct:+.1%} (baseline {base_fmt} → current {cur_fmt})")
+                if sa.baseline_date:
+                    if sa.comparison in ("wow", "pace"):
+                        baseline_date = sa.baseline_date
+                    elif sa.comparison == "dod":
+                        baseline_date_2 = sa.baseline_date
+                    else:
+                        baseline_date = sa.baseline_date
+
+            anomaly_detail = " | ".join(anomaly_parts) if anomaly_parts else "anomaly detected"
+            triggered_comparisons = ", ".join(_comparison_label(sa.comparison) for sa in saved_anomalies) if saved_anomalies else "unknown"
+
             _thread_metrics[thread.id] = {
                 "metric_id": metric_id,
-                "label": metric_info["label"],
+                "metric_label": metric_info["metric_label"],
                 "direction": metric_info["direction"],
-                "anomaly_desc": f"{comparison} anomaly detected",
+                "anomaly_desc": anomaly_detail,
             }
             _reset_thread_timer(thread.id)
 
@@ -442,15 +661,20 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             baseline = Config.BASELINE_START_DATE
             prompt = (
                 f"Today's date: {today}\n"
-                f"Do a detailed analysis of the metric {metric_info['label']} (id: {metric_id}).\n"
+                f"Do a detailed analysis of the metric {metric_info['metric_label']} (id: {metric_id}).\n"
                 f"Direction: {metric_info['direction']}\n"
-                f"Anomaly detected via: {_comparison_label(comparison)}\n\n"
+                f"Anomalies detected on {reference_date} via: {triggered_comparisons}\n"
+                f"{anomaly_detail}\n\n"
                 "Steps:\n"
-                f"1. Fetch daily data FROM {baseline} (beta launch) to today with query_steep_metric. "
-                f"Do NOT use data before {baseline} – it is unreliable.\n"
-                f"2. Draw a line chart with plot_results. Use anomaly_date=\"{today}\" to mark today's anomaly on the chart.\n"
+                f"1. Fetch daily data FROM {baseline} (beta launch) to {reference_date} with query_steep_metric. "
+                f"Do NOT use data before {baseline}. Do NOT include data after {reference_date}.\n"
+                f"2. Draw a line chart with plot_results. Use anomaly_date=\"{reference_date}\" to mark the anomaly. "
+                + (f"Use baseline_date=\"{baseline_date}\" to mark the WoW/Pace baseline (yellow). " if baseline_date else "")
+                + (f"Use baseline_date_2=\"{baseline_date_2}\" to mark the DoD baseline (green)." if baseline_date_2 else "")
+                + "\n"
                 "3. Check for relevant Jira releases with get_jira_releases\n"
-                "4. Provide a detailed analysis with possible causes and recommendation\n"
+                f"4. Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
+                "Provide possible causes and a recommendation.\n"
             )
 
             loop = asyncio.get_running_loop()
@@ -473,7 +697,8 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 for chunk in split_message(response.text):
                     await thread.send(content=chunk)
 
-            await thread.send("💬 Feel free to ask more questions about this metric here!")
+            if steep_url:
+                await thread.send(f"🔗 [View metric in Steep]({steep_url})")
 
         except Exception as e:
             logger.error("Analysis thread failed: %s", e)
