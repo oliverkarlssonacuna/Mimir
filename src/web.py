@@ -172,13 +172,16 @@ async def admin(request: Request):
     metrics = bq.run_query(sql)
     active_count = sum(1 for m in metrics if m.get("enabled"))
 
-    return templates.TemplateResponse("admin.html", {
-        "request": request,
-        "user": _user(request),
-        "metrics": metrics,
-        "active_count": active_count,
-        "total_count": len(metrics),
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="admin.html",
+        context={
+            "user": _user(request),
+            "metrics": metrics,
+            "active_count": active_count,
+            "total_count": len(metrics),
+        },
+    )
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
