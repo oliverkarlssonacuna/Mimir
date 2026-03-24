@@ -561,7 +561,6 @@ async def on_ready():
     synced = await tree.sync()
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
-    await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
 
@@ -737,12 +736,18 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
         )
 
 
+async def _main():
+    await _start_internal_server()
+    async with bot:
+        await bot.start(Config.DISCORD_BOT_TOKEN)
+
+
 def run():
     token = Config.DISCORD_BOT_TOKEN
     if not token:
         logger.error("DISCORD_BOT_TOKEN is not set in .env")
         sys.exit(1)
-    bot.run(token)
+    asyncio.run(_main())
 
 
 if __name__ == "__main__":
