@@ -361,31 +361,17 @@ async def monitor_loop():
         return
 
     total_metrics = len(detector._metric_configs)
-    progress_msg = await channel.send(f"⏳ Checking metrics... `0/{total_metrics}` {'░' * 20}")
-
     loop = asyncio.get_running_loop()
-    last_update = [0]
-
-    def make_bar(current: int, total: int) -> str:
-        filled = int(20 * current / total) if total else 0
-        bar = '█' * filled + '░' * (20 - filled)
-        pct = int(100 * current / total) if total else 0
-        return f"⏳ Checking metrics... `{current}/{total}` `{bar}` {pct}%"
-
-    def on_progress(current: int, total: int, label: str):
-        if current - last_update[0] >= 5 or current == total:
-            last_update[0] = current
-            asyncio.run_coroutine_threadsafe(
-                progress_msg.edit(content=make_bar(current, total)), loop
-            )
 
     try:
+        # No progress callback — avoids flooding asyncio loop with Discord API calls
+        # which would block Discord's heartbeat and cause "Can't keep up" warnings.
         anomalies, failed_count = await loop.run_in_executor(
-            None, lambda: detector.collect_and_check(progress_callback=on_progress)
+            None, lambda: detector.collect_and_check()
         )
     except Exception as e:
         logger.error("Monitor check failed: %s", e)
-        await progress_msg.edit(content=f"❌ Check failed: {e}")
+        await channel.send(f"❌ Monitor check failed: {e}")
         return
 
     checked_count = total_metrics - failed_count
@@ -396,7 +382,7 @@ async def monitor_loop():
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await progress_msg.edit(content=f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.{fail_note}")
+        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.{fail_note}")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
