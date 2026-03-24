@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,9 @@ class SteepClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.session = requests.Session()
+        # No automatic retries on connection/SSL errors — we handle retries ourselves
+        adapter = HTTPAdapter(max_retries=Retry(total=0))
+        self.session.mount("https://", adapter)
         self.session.headers.update({
             "Authorization": f"ApiKey {api_key}",
             "Content-Type": "application/json",
