@@ -332,3 +332,4 @@ if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("web:app", host="0.0.0.0", port=8080, reload=True)
+# deploy
