@@ -698,8 +698,8 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 await thread.send(f"🔗 [View metric in Steep]({steep_url})")
 
         except Exception as e:
-            logger.error("Analysis thread failed: %s", e)
-            await interaction.followup.send(f"Could not create analysis thread: {e}")
+            logger.exception("Analysis thread failed for metric %s", metric_id)
+            await interaction.followup.send(f"❌ Analysis failed: {e}\n\nTry clicking **Deep analysis** again — this is usually a transient error.")
 
     elif action == "handled":
         handled_by = interaction.user.display_name

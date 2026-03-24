@@ -12,6 +12,7 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
@@ -614,15 +615,33 @@ class Agent:
         max_iterations = 10
 
         for iteration in range(max_iterations):
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=active_system_prompt,
-                    tools=[_get_tools()],
-                    temperature=0,
-                ),
-            )
+            # Retry Vertex AI call on transient 503/429 errors
+            last_err = None
+            for attempt in range(3):
+                try:
+                    response = self.client.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=active_system_prompt,
+                            tools=[_get_tools()],
+                            temperature=0,
+                        ),
+                    )
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    err_str = str(e).lower()
+                    # Retry on 503 Service Unavailable or 429 Too Many Requests
+                    if "503" in err_str or "502" in err_str or "429" in err_str or "unavailable" in err_str:
+                        wait = 2 ** attempt
+                        logger.warning("Vertex AI transient error (attempt %d/3): %s — retrying in %ds", attempt + 1, e, wait)
+                        time.sleep(wait)
+                        continue
+                    raise  # non-retryable error
+            if last_err is not None:
+                raise last_err
 
             candidate = response.candidates[0]
             parts = candidate.content.parts if candidate.content and candidate.content.parts else []
