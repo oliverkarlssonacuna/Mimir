@@ -172,14 +172,16 @@ async def status(interaction: discord.Interaction):
             )
 
     try:
-        anomalies = await loop.run_in_executor(
+        anomalies, failed_count = await loop.run_in_executor(
             None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
         await progress_msg.edit(content=f"❌ Error during check: {e}")
         return
 
-    await progress_msg.edit(content=f"✅ Done — checked `{total_metrics}` metrics.")
+    checked_count = total_metrics - failed_count
+    fail_note = f" ⚠️ `{failed_count}` metrics could not be fetched (Steep SSL errors)." if failed_count > 0 else ""
+    await progress_msg.edit(content=f"✅ Done — checked `{checked_count}/{total_metrics}` metrics.{fail_note}")
 
     if not anomalies:
         embed = discord.Embed(
@@ -378,7 +380,7 @@ async def monitor_loop():
             )
 
     try:
-        anomalies = await loop.run_in_executor(
+        anomalies, failed_count = await loop.run_in_executor(
             None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
@@ -386,9 +388,15 @@ async def monitor_loop():
         await progress_msg.edit(content=f"❌ Check failed: {e}")
         return
 
+    checked_count = total_metrics - failed_count
+    if failed_count > 0:
+        fail_note = f" ⚠️ `{failed_count}/{total_metrics}` metrics could not be fetched from Steep (SSL errors) — results may be incomplete."
+    else:
+        fail_note = ""
+
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await progress_msg.edit(content=f"✅ All clear — checked `{total_metrics}` metrics, no anomalies detected.")
+        await progress_msg.edit(content=f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.{fail_note}")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -401,9 +409,13 @@ async def monitor_loop():
 
     if not new_anomalies:
         logger.info("Monitor: anomalies exist but already alerted today.")
+        if fail_note:
+            await channel.send(fail_note.strip())
         return
 
     grouped = _group_anomalies(new_anomalies)
+    if fail_note:
+        await channel.send(fail_note.strip())
     for metric_anomalies in grouped.values():
         try:
             await send_grouped_anomaly_alert(channel, metric_anomalies)

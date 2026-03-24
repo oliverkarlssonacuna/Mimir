@@ -44,10 +44,11 @@ class Detector:
 
     # ── Main entry point ──────────────────────────────────────────────────    
 
-    def collect_and_check(self, progress_callback=None) -> list[Anomaly]:
+    def collect_and_check(self, progress_callback=None) -> tuple[list[Anomaly], int]:
         """Collect snapshots from Steep, save to BQ, run comparisons.
 
-        Returns a list of Anomaly objects (empty if all is well).
+        Returns (anomalies, failed_count) where failed_count is the number of metrics
+        that could not be fetched from Steep.
         progress_callback: optional callable(current, total, label) called after each metric.
         """
         now = datetime.now(timezone.utc)
@@ -58,6 +59,7 @@ class Detector:
         total = len(self._metric_configs)
         _lock = threading.Lock()
         _counter = [0]
+        _failed = [0]
 
         def _process_one(metric: dict) -> list[Anomaly]:
             metric_id = metric["metric_id"]
@@ -71,6 +73,7 @@ class Detector:
                 logger.error("Failed to fetch %s from Steep: %s", label, e)
                 with _lock:
                     _counter[0] += 1
+                    _failed[0] += 1
                     if progress_callback:
                         progress_callback(_counter[0], total, label)
                 return result
@@ -104,7 +107,7 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=4) as executor:
             futures = [executor.submit(_process_one, m) for m in self._metric_configs]
             for future in as_completed(futures):
                 try:
@@ -112,7 +115,9 @@ class Detector:
                 except Exception as e:
                     logger.error("Unhandled error in metric worker: %s", e)
 
-        return anomalies
+        if _failed[0] > 0:
+            logger.warning("Steep fetch: %d/%d metrics failed.", _failed[0], total)
+        return anomalies, _failed[0]
 
     # ── Fetch from Steep ──────────────────────────────────────────────────
 

@@ -27,8 +27,8 @@ def main():
     detector = Detector(steep=steep, bq=bq)
 
     try:
-        anomalies = detector.collect_and_check()
-        logger.info("Snapshot job complete. %d anomalies detected (not alerted).", len(anomalies))
+        anomalies, failed_count = detector.collect_and_check()
+        logger.info("Snapshot job complete. %d anomalies detected (not alerted). %d metrics failed to fetch.", len(anomalies), failed_count)
     except Exception as e:
         logger.error("Snapshot job failed: %s", e)
         sys.exit(1)
