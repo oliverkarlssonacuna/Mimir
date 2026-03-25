@@ -76,11 +76,17 @@ class SteepClient:
             body["sliceId"] = slice_id
 
         for attempt in range(6):
-            resp = self.session.post(
-                f"{BASE_URL}/v1/metrics/{metric_id}/query",
-                json=body,
-                timeout=5,
-            )
+            try:
+                resp = self.session.post(
+                    f"{BASE_URL}/v1/metrics/{metric_id}/query",
+                    json=body,
+                    timeout=30,
+                )
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+                wait = 2 ** attempt
+                logger.warning("Steep connection error (attempt %d/6), retrying in %ds: %s", attempt + 1, wait, e)
+                time.sleep(wait)
+                continue
             if resp.status_code == 429:
                 wait = 2 ** attempt
                 logger.warning("Steep rate limited (429), retrying in %ds...", wait)
@@ -89,8 +95,7 @@ class SteepClient:
             resp.raise_for_status()
             time.sleep(0.3)  # throttle to avoid 429 rate limiting
             return resp.json()
-        resp.raise_for_status()
-        return resp.json()
+        raise requests.exceptions.RetryError(f"Steep query failed after 6 attempts for metric {metric_id}")
 
     def query_metric_recent(
         self,

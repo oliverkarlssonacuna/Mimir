@@ -107,7 +107,7 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        with ThreadPoolExecutor(max_workers=3) as executor:
             futures = [executor.submit(_process_one, m) for m in self._metric_configs]
             for future in as_completed(futures):
                 try:
