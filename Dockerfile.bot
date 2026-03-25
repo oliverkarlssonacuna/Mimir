@@ -15,6 +15,9 @@ RUN pip install --no-cache-dir \
     requests \
     aiohttp
 
+# Pre-build matplotlib font cache so it doesn't block at runtime (~60s otherwise)
+RUN python -c "import matplotlib.font_manager; matplotlib.font_manager.findfont('DejaVu Sans')"
+
 ENV PYTHONPATH=/app/src
 
 CMD ["python", "src/bot.py"]
