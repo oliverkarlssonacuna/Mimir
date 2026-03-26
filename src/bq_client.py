@@ -16,19 +16,19 @@ class BQClient:
         self.max_rows = max_rows
         self.client = bigquery.Client(project=project_id)
 
-    def run_query(self, sql: str, params: list | None = None) -> list[dict[str, Any]]:
-        """Execute SQL and return up to max_rows rows as plain dicts."""
+    def run_query(self, sql: str, params: list | None = None, max_rows: int | None = None) -> list[dict[str, Any]]:
+        """Execute SQL and return rows as plain dicts. max_rows overrides instance default."""
         logger.info("Running query: %s", sql[:300])
         job_config = None
         if params:
             job_config = bigquery.QueryJobConfig(query_parameters=params)
         job = self.client.query(sql, job_config=job_config)
         rows = job.result()
-
+        limit = max_rows if max_rows is not None else self.max_rows
         result = []
         for i, row in enumerate(rows):
-            if i >= self.max_rows:
-                logger.warning("Result truncated at %d rows", self.max_rows)
+            if i >= limit:
+                logger.warning("Result truncated at %d rows", limit)
                 break
             result.append({k: self._serialize(v) for k, v in row.items()})
         return result
