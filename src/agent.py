@@ -16,10 +16,22 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+
 from google import genai
 from google.genai import types
 
 import jira_client
+
+# Pre-warm matplotlib font cache at import time so the first plot_results call isn't slow
+try:
+    _fig = plt.figure()
+    plt.close(_fig)
+except Exception:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -280,11 +292,6 @@ def _thin_ticks(ax, xs: list[str], max_ticks: int = 15):
 
 def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "") -> str:
     """Render a chart and save to a temp PNG. Returns the file path."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as mticker
-
     try:
         if isinstance(data_json, str):
             data = json.loads(data_json)
