@@ -115,7 +115,9 @@ async def root():
 @app.get("/auth/login", include_in_schema=False)
 async def login(request: Request):
     redirect_uri = request.url_for("auth_callback")
-    return await oauth.google.authorize_redirect(request, str(redirect_uri))
+    # Cloud Run sits behind a TLS-terminating proxy; force https.
+    redirect_uri = str(redirect_uri).replace("http://", "https://", 1)
+    return await oauth.google.authorize_redirect(request, redirect_uri)
 
 
 @app.get("/auth/callback", name="auth_callback", include_in_schema=False)
@@ -170,13 +172,16 @@ async def admin(request: Request):
     metrics = bq.run_query(sql)
     active_count = sum(1 for m in metrics if m.get("enabled"))
 
-    return templates.TemplateResponse("admin.html", {
-        "request": request,
-        "user": _user(request),
-        "metrics": metrics,
-        "active_count": active_count,
-        "total_count": len(metrics),
-    })
+    return templates.TemplateResponse(
+        request=request,
+        name="admin.html",
+        context={
+            "user": _user(request),
+            "metrics": metrics,
+            "active_count": active_count,
+            "total_count": len(metrics),
+        },
+    )
 
 
 # ── API routes ────────────────────────────────────────────────────────────────
@@ -332,3 +337,4 @@ if __name__ == "__main__":
     import uvicorn
     logging.basicConfig(level=logging.INFO)
     uvicorn.run("web:app", host="0.0.0.0", port=8080, reload=True)
+# deploy

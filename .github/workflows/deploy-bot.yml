@@ -1,0 +1,74 @@
+name: Deploy Bot to Cloud Run
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "Dockerfile.bot"
+      - "pyproject.toml"
+      - ".github/workflows/deploy-bot.yml"
+
+env:
+  PROJECT_ID: lia-project-sandbox-deletable
+  REGION: europe-west4
+  SERVICE: mimir-bot
+  IMAGE: europe-west4-docker.pkg.dev/lia-project-sandbox-deletable/mimir/bot
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # Required for Workload Identity Federation
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.REGION }}-docker.pkg.dev --quiet
+
+      - name: Build and push Docker image
+        run: |
+          docker build -f Dockerfile.bot \
+            -t ${{ env.IMAGE }}:${{ github.sha }} \
+            -t ${{ env.IMAGE }}:latest \
+            .
+          docker push ${{ env.IMAGE }}:${{ github.sha }}
+          docker push ${{ env.IMAGE }}:latest
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy ${{ env.SERVICE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --region=${{ env.REGION }} \
+            --image=${{ env.IMAGE }}:${{ github.sha }} \
+            --platform=managed \
+            --allow-unauthenticated \
+            --port=8081 \
+            --min-instances=1 \
+            --max-instances=1 \
+            --set-secrets="DISCORD_BOT_TOKEN=mimir-discord-bot-token:latest,DISCORD_ALERT_CHANNEL_ID=mimir-discord-alert-channel-id:latest,STEEP_API_TOKEN=mimir-steep-api-token:latest" \
+            --set-env-vars="GCP_PROJECT_ID=${{ env.PROJECT_ID }},ADMIN_URL=https://mimir-web-xhk35fyqfq-ez.a.run.app,BOT_INTERNAL_PORT=8081,GCP_VERTEXAI_REGION=us-central1" # gemini-2.0-flash-001 only available in us-central1
+
+      - name: Print service URL
+        id: url
+        run: |
+          URL=$(gcloud run services describe ${{ env.SERVICE }} \
+            --project=${{ env.PROJECT_ID }} \
+            --region=${{ env.REGION }} \
+            --format="value(status.url)")
+          echo "Deployed to: $URL"
+          echo "url=$URL" >> $GITHUB_OUTPUT

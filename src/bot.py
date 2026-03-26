@@ -172,14 +172,21 @@ async def status(interaction: discord.Interaction):
             )
 
     try:
-        anomalies = await loop.run_in_executor(
+        anomalies, failed_labels = await loop.run_in_executor(
             None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
         await progress_msg.edit(content=f"❌ Error during check: {e}")
         return
 
-    await progress_msg.edit(content=f"✅ Done — checked `{total_metrics}` metrics.")
+    failed_count = len(failed_labels)
+    checked_count = total_metrics - failed_count
+    if failed_labels:
+        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
+        fail_note = f" ⚠️ {failed_count} metric(s) could not be fetched: {failed_list}"
+    else:
+        fail_note = ""
+    await progress_msg.edit(content=f"✅ Done — checked `{checked_count}/{total_metrics}` metrics.{fail_note}")
 
     if not anomalies:
         embed = discord.Embed(
@@ -359,36 +366,30 @@ async def monitor_loop():
         return
 
     total_metrics = len(detector._metric_configs)
-    progress_msg = await channel.send(f"⏳ Checking metrics... `0/{total_metrics}` {'░' * 20}")
-
     loop = asyncio.get_running_loop()
-    last_update = [0]
-
-    def make_bar(current: int, total: int) -> str:
-        filled = int(20 * current / total) if total else 0
-        bar = '█' * filled + '░' * (20 - filled)
-        pct = int(100 * current / total) if total else 0
-        return f"⏳ Checking metrics... `{current}/{total}` `{bar}` {pct}%"
-
-    def on_progress(current: int, total: int, label: str):
-        if current - last_update[0] >= 5 or current == total:
-            last_update[0] = current
-            asyncio.run_coroutine_threadsafe(
-                progress_msg.edit(content=make_bar(current, total)), loop
-            )
 
     try:
-        anomalies = await loop.run_in_executor(
-            None, lambda: detector.collect_and_check(progress_callback=on_progress)
+        # No progress callback — avoids flooding asyncio loop with Discord API calls
+        # which would block Discord's heartbeat and cause "Can't keep up" warnings.
+        anomalies, failed_labels = await loop.run_in_executor(
+            None, lambda: detector.collect_and_check()
         )
     except Exception as e:
-        logger.error("Monitor check failed: %s", e)
-        await progress_msg.edit(content=f"❌ Check failed: {e}")
+        logger.error("Monitor check failed: %s", e, exc_info=True)
+        await channel.send(f"❌ Monitor check failed: {e}")
         return
+
+    failed_count = len(failed_labels)
+    checked_count = total_metrics - failed_count
+    if failed_labels:
+        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
+        fail_note = f" ⚠️ {failed_count}/{total_metrics} metric(s) could not be fetched — {failed_list}"
+    else:
+        fail_note = ""
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await progress_msg.edit(content=f"✅ All clear — checked `{total_metrics}` metrics, no anomalies detected.")
+        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.{fail_note}")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -401,9 +402,13 @@ async def monitor_loop():
 
     if not new_anomalies:
         logger.info("Monitor: anomalies exist but already alerted today.")
+        if fail_note:
+            await channel.send(fail_note.strip())
         return
 
     grouped = _group_anomalies(new_anomalies)
+    if fail_note:
+        await channel.send(fail_note.strip())
     for metric_anomalies in grouped.values():
         try:
             await send_grouped_anomaly_alert(channel, metric_anomalies)
@@ -455,7 +460,7 @@ async def on_message(message: discord.Message):
 
         prompt = (
             f"Today's date: {today}\n"
-            f"Metric: {metric_info["metric_label"]} (id: {metric_info['metric_id']})\n"
+            f"Metric: {metric_info['metric_label']} (id: {metric_info['metric_id']})\n"
             f"Direction: {metric_info['direction']}\n"
         )
         if metric_info.get("anomaly_desc"):
@@ -561,7 +566,6 @@ async def on_ready():
     synced = await tree.sync()
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
-    await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
 
@@ -701,8 +705,8 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 await thread.send(f"🔗 [View metric in Steep]({steep_url})")
 
         except Exception as e:
-            logger.error("Analysis thread failed: %s", e)
-            await interaction.followup.send(f"Could not create analysis thread: {e}")
+            logger.exception("Analysis thread failed for metric %s", metric_id)
+            await interaction.followup.send(f"❌ Analysis failed: {e}\n\nTry clicking **Deep analysis** again — this is usually a transient error.")
 
     elif action == "handled":
         handled_by = interaction.user.display_name
@@ -737,12 +741,18 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
         )
 
 
+async def _main():
+    await _start_internal_server()
+    async with bot:
+        await bot.start(Config.DISCORD_BOT_TOKEN)
+
+
 def run():
     token = Config.DISCORD_BOT_TOKEN
     if not token:
         logger.error("DISCORD_BOT_TOKEN is not set in .env")
         sys.exit(1)
-    bot.run(token)
+    asyncio.run(_main())
 
 
 if __name__ == "__main__":

@@ -12,13 +12,26 @@ import json
 import logging
 import os
 import tempfile
+import time
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
 
 from google import genai
 from google.genai import types
 
 import jira_client
+
+# Pre-warm matplotlib font cache at import time so the first plot_results call isn't slow
+try:
+    _fig = plt.figure()
+    plt.close(_fig)
+except Exception:
+    pass
 
 logger = logging.getLogger(__name__)
 
@@ -279,11 +292,6 @@ def _thin_ticks(ax, xs: list[str], max_ticks: int = 15):
 
 def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "") -> str:
     """Render a chart and save to a temp PNG. Returns the file path."""
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    import matplotlib.ticker as mticker
-
     try:
         if isinstance(data_json, str):
             data = json.loads(data_json)
@@ -614,15 +622,33 @@ class Agent:
         max_iterations = 10
 
         for iteration in range(max_iterations):
-            response = self.client.models.generate_content(
-                model=self.model,
-                contents=contents,
-                config=types.GenerateContentConfig(
-                    system_instruction=active_system_prompt,
-                    tools=[_get_tools()],
-                    temperature=0,
-                ),
-            )
+            # Retry Vertex AI call on transient 503/429 errors
+            last_err = None
+            for attempt in range(3):
+                try:
+                    response = self.client.models.generate_content(
+                        model=self.model,
+                        contents=contents,
+                        config=types.GenerateContentConfig(
+                            system_instruction=active_system_prompt,
+                            tools=[_get_tools()],
+                            temperature=0,
+                        ),
+                    )
+                    last_err = None
+                    break
+                except Exception as e:
+                    last_err = e
+                    err_str = str(e).lower()
+                    # Retry on 503 Service Unavailable or 429 Too Many Requests
+                    if "503" in err_str or "502" in err_str or "429" in err_str or "unavailable" in err_str:
+                        wait = 2 ** attempt
+                        logger.warning("Vertex AI transient error (attempt %d/3): %s — retrying in %ds", attempt + 1, e, wait)
+                        time.sleep(wait)
+                        continue
+                    raise  # non-retryable error
+            if last_err is not None:
+                raise last_err
 
             candidate = response.candidates[0]
             parts = candidate.content.parts if candidate.content and candidate.content.parts else []

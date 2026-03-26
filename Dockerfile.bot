@@ -1,0 +1,23 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+COPY pyproject.toml .
+COPY src/ ./src/
+
+RUN pip install --no-cache-dir \
+    "discord.py>=2.4.0" \
+    google-cloud-bigquery \
+    google-genai \
+    python-dotenv \
+    matplotlib \
+    tabulate \
+    requests \
+    aiohttp
+
+# Pre-build matplotlib font cache so it doesn't block at runtime (~60s otherwise)
+RUN python -c "import matplotlib.font_manager; matplotlib.font_manager.findfont('DejaVu Sans')"
+
+ENV PYTHONPATH=/app/src
+
+CMD ["python", "src/bot.py"]
