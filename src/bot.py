@@ -172,15 +172,20 @@ async def status(interaction: discord.Interaction):
             )
 
     try:
-        anomalies, failed_count = await loop.run_in_executor(
+        anomalies, failed_labels = await loop.run_in_executor(
             None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
         await progress_msg.edit(content=f"❌ Error during check: {e}")
         return
 
+    failed_count = len(failed_labels)
     checked_count = total_metrics - failed_count
-    fail_note = f" ⚠️ `{failed_count}` metrics could not be fetched (Steep SSL errors)." if failed_count > 0 else ""
+    if failed_labels:
+        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
+        fail_note = f" ⚠️ {failed_count} metric(s) could not be fetched: {failed_list}"
+    else:
+        fail_note = ""
     await progress_msg.edit(content=f"✅ Done — checked `{checked_count}/{total_metrics}` metrics.{fail_note}")
 
     if not anomalies:
@@ -366,17 +371,19 @@ async def monitor_loop():
     try:
         # No progress callback — avoids flooding asyncio loop with Discord API calls
         # which would block Discord's heartbeat and cause "Can't keep up" warnings.
-        anomalies, failed_count = await loop.run_in_executor(
+        anomalies, failed_labels = await loop.run_in_executor(
             None, lambda: detector.collect_and_check()
         )
     except Exception as e:
-        logger.error("Monitor check failed: %s", e)
+        logger.error("Monitor check failed: %s", e, exc_info=True)
         await channel.send(f"❌ Monitor check failed: {e}")
         return
 
+    failed_count = len(failed_labels)
     checked_count = total_metrics - failed_count
-    if failed_count > 0:
-        fail_note = f" ⚠️ `{failed_count}/{total_metrics}` metrics could not be fetched from Steep (SSL errors) — results may be incomplete."
+    if failed_labels:
+        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
+        fail_note = f" ⚠️ {failed_count}/{total_metrics} metric(s) could not be fetched — {failed_list}"
     else:
         fail_note = ""
 

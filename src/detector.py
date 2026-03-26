@@ -59,7 +59,7 @@ class Detector:
         total = len(self._metric_configs)
         _lock = threading.Lock()
         _counter = [0]
-        _failed = [0]
+        _failed_labels: list[tuple[str, str]] = []  # (label, error_message)
 
         def _process_one(metric: dict) -> list[Anomaly]:
             metric_id = metric["metric_id"]
@@ -70,10 +70,10 @@ class Detector:
             try:
                 value, refreshed_at, historical = self._fetch_values(metric_id)
             except Exception as e:
-                logger.error("Failed to fetch %s from Steep: %s", label, e)
+                logger.error("Failed to fetch %s from Steep: %s", label, e, exc_info=True)
                 with _lock:
                     _counter[0] += 1
-                    _failed[0] += 1
+                    _failed_labels.append((label, type(e).__name__))
                     if progress_callback:
                         progress_callback(_counter[0], total, label)
                 return result
@@ -113,11 +113,16 @@ class Detector:
                 try:
                     anomalies.extend(future.result())
                 except Exception as e:
-                    logger.error("Unhandled error in metric worker: %s", e)
+                    logger.error("Unhandled error in metric worker: %s", e, exc_info=True)
 
-        if _failed[0] > 0:
-            logger.warning("Steep fetch: %d/%d metrics failed.", _failed[0], total)
-        return anomalies, _failed[0]
+        if _failed_labels:
+            logger.warning(
+                "Steep fetch: %d/%d metrics failed: %s",
+                len(_failed_labels),
+                total,
+                ", ".join(f"{lbl} ({err})" for lbl, err in _failed_labels),
+            )
+        return anomalies, _failed_labels
 
     # ── Fetch from Steep ──────────────────────────────────────────────────
 
