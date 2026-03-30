@@ -32,9 +32,13 @@ class Config:
     BQ_SNAPSHOT_TABLE: str = (
         "lia-project-sandbox-deletable.anomaly_checks_demo.steep_metric_snapshots"
     )
-    # BQ config table for metric alert rules
+    # BQ config table for Steep metric alert rules
     BQ_METRIC_CONFIGS_TABLE: str = (
-        "lia-project-sandbox-deletable.anomaly_checks_demo.metric_configs"
+        "lia-project-sandbox-deletable.anomaly_checks_demo.steep_metrics_configs"
+    )
+    # BQ config table for BQ-sourced metrics (tables/queries)
+    BQ_METRICS_CONFIGS_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.bq_metrics_configs"
     )
     MAX_QUERY_ROWS: int = 200
 
