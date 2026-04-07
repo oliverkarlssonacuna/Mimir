@@ -448,11 +448,18 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
     # ── Helper: format value for labels ─────────────────────────────────
     def _fmt_val(v):
+        if v == int(v):
+            return f"{int(v):,}"  # 18, 3, 1 — no decimals for whole numbers
         if abs(v) >= 10:
-            return f"{v:,.0f}"
+            return f"{v:,.1f}"
         if abs(v) >= 0.01:
             return f"{v:.2f}"
         return f"{v:.4f}"
+
+    def _fmt_pair(a, b):
+        """Format two values consistently — both use the same decimal style."""
+        sa, sb = _fmt_val(a), _fmt_val(b)
+        return f"{sa} → {sb}"
 
     # ── Collect all annotation points to avoid overlap ────────────────────
     _annotations = []  # list of (idx, y, color, label_text)
@@ -496,12 +503,12 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         return b_idx
 
     def _pct_change_label(prefix, baseline_val):
-        """Build label like 'WoW ▼ 26.5%  (4.31 → 3.17)' showing change."""
+        """Build label like 'WoW ▼ 26.5%  (18 → 1)' showing change."""
         if _anomaly_y is None or baseline_val is None or baseline_val == 0:
             return f"{prefix}  ·  {_fmt_val(baseline_val or 0)}"
         pct = ((_anomaly_y - baseline_val) / abs(baseline_val)) * 100
         arrow = "▲" if pct > 0 else "▼"
-        return f"{prefix}  {arrow} {abs(pct):.1f}%  ({_fmt_val(baseline_val)} → {_fmt_val(_anomaly_y)})"
+        return f"{prefix}  {arrow} {abs(pct):.1f}%  ({_fmt_pair(baseline_val, _anomaly_y)})"
 
     if baseline_date and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date)
@@ -519,19 +526,28 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         y_min, y_max = min(ys), max(ys)
     label_y_top = y_max * 1.08 if y_max > 0 else 1
 
+    n_points = len(xs) if xs else 1
     for i, (a_idx, a_y, a_color, a_text) in enumerate(_annotations):
         # Thin vertical line from data point to top label area
         ax.vlines(a_idx, a_y, label_y_top, color=a_color, linewidth=0.8, alpha=0.4, zorder=5)
         # Small clean dot on data point
         ax.plot(a_idx, a_y, "o", color=a_color, markersize=6, zorder=7,
                 markeredgecolor=SURFACE, markeredgewidth=1.5)
+        # Smart alignment: avoid pills clipping at edges
+        rel_pos = a_idx / max(n_points - 1, 1)  # 0..1
+        if rel_pos > 0.8:
+            h_align, x_off = "right", -8
+        elif rel_pos < 0.2:
+            h_align, x_off = "left", 8
+        else:
+            h_align, x_off = "center", 0
         # Label at top — pill style
         ax.annotate(
             a_text,
             xy=(a_idx, label_y_top),
-            xytext=(0, 6 + i * 18), textcoords="offset points",
+            xytext=(x_off, 6 + i * 18), textcoords="offset points",
             fontsize=8, color=a_color, fontweight="500",
-            ha="center", va="bottom",
+            ha=h_align, va="bottom",
             bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE, edgecolor=a_color, alpha=0.95, linewidth=0.7),
             zorder=8,
         )
