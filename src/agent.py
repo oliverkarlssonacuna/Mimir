@@ -520,25 +520,91 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         if b_idx is not None:
             _annotations.append((b_idx, ys[b_idx], GREEN, _pct_change_label("DoD", ys[b_idx])))
 
-    # ── Draw annotations cleanly ─────────────────────────────────────────
+    # ── Draw annotations: Bloomberg-style brackets ───────────────────────
     if _annotations and ys:
-        # Dots on data points
-        for a_idx, a_y, a_color, _a_text in _annotations:
-            ax.plot(a_idx, a_y, "o", color=a_color, markersize=6, zorder=7,
-                    markeredgecolor=SURFACE, markeredgewidth=1.5)
+        y_data_min, y_data_max = min(ys), max(ys)
+        y_range = max(y_data_max - y_data_min, 1)
 
-        # Legend block — stacked pills in top-right corner
-        # Use axes-relative coordinates so they never clip
-        for i, (_a_idx, _a_y, a_color, a_text) in enumerate(_annotations):
+        anomaly_entry  = next((e for e in _annotations if e[2] == RED), None)
+        baseline_entries = [e for e in _annotations if e[2] != RED]
+
+        # ── Dots + value labels at each key point ─────────────────────────
+        n_pts = len(xs) if xs else 1
+        seen_xvals = {}  # track x positions that already have a label to avoid overlap
+        for a_idx, a_y, a_color, _text in _annotations:
+            ax.plot(a_idx, a_y, "o", color=a_color, markersize=7, zorder=7,
+                    markeredgecolor=SURFACE, markeredgewidth=1.5)
+            rel = a_idx / max(n_pts - 1, 1)
+            ha_dot = "right" if rel > 0.85 else ("left" if rel < 0.15 else "center")
+            x_off  = -8    if rel > 0.85 else (8    if rel < 0.15 else 0)
+            # Stagger duplicated x positions (anomaly + DoD share same day)
+            y_off = 9 + seen_xvals.get(a_idx, 0) * 14
+            seen_xvals[a_idx] = seen_xvals.get(a_idx, 0) + 1
             ax.annotate(
-                a_text,
+                _fmt_val(a_y),
+                xy=(a_idx, a_y),
+                xytext=(x_off, y_off), textcoords="offset points",
+                fontsize=7.5, color=a_color, ha=ha_dot, va="bottom",
+                fontweight="600", zorder=8,
+            )
+
+        # ── Bloomberg brackets: ├──── label ────┤ ─────────────────────────
+        if anomaly_entry and baseline_entries:
+            a_idx_main = anomaly_entry[0]
+            bridge_base = y_data_max + y_range * 0.12
+            tick_h      = y_range * 0.025
+
+            for j, (b_idx, b_y, b_color, b_text) in enumerate(baseline_entries):
+                bridge_y = bridge_base + j * y_range * 0.15
+                x1, x2  = min(b_idx, a_idx_main), max(b_idx, a_idx_main)
+
+                # Horizontal span line
+                ax.plot([x1, x2], [bridge_y, bridge_y],
+                        color=b_color, linewidth=1.2, alpha=0.8,
+                        solid_capstyle="round", zorder=5)
+                # End ticks — ├ and ┤
+                for xk in [x1, x2]:
+                    ax.plot([xk, xk], [bridge_y - tick_h, bridge_y + tick_h],
+                            color=b_color, linewidth=1.2, alpha=0.8, zorder=5)
+
+                # Label centered on bracket
+                mid_x = (x1 + x2) / 2
+                ax.text(mid_x, bridge_y + tick_h + y_range * 0.01,
+                        b_text,
+                        ha="center", va="bottom",
+                        fontsize=8, color=b_color, fontweight="600", zorder=8,
+                        bbox=dict(boxstyle="round,pad=0.4", facecolor=SURFACE,
+                                  edgecolor=b_color, alpha=0.95, linewidth=0.7))
+
+            # Anomaly pill — top-right corner (single, clean)
+            ax.annotate(
+                f"Anomaly  ·  {_fmt_val(anomaly_entry[1])}",
                 xy=(1, 1), xycoords="axes fraction",
-                xytext=(-10, -10 - i * 22), textcoords="offset points",
-                fontsize=8, color=a_color, fontweight="500",
+                xytext=(-10, -10), textcoords="offset points",
+                fontsize=8, color=RED, fontweight="500",
                 ha="right", va="top",
-                bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE, edgecolor=a_color, alpha=0.95, linewidth=0.7),
+                bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE,
+                          edgecolor=RED, alpha=0.95, linewidth=0.7),
                 zorder=8,
             )
+
+            # Expand y-axis to fit brackets + labels
+            top = bridge_base + (len(baseline_entries) - 1) * y_range * 0.15 + y_range * 0.22
+            ax.set_ylim(y_data_min - y_range * 0.05, top)
+
+        else:
+            # Fallback: pills in top-right if no pairs to bracket
+            for i, (_a_idx, _a_y, a_color, a_text) in enumerate(_annotations):
+                ax.annotate(
+                    a_text,
+                    xy=(1, 1), xycoords="axes fraction",
+                    xytext=(-10, -10 - i * 22), textcoords="offset points",
+                    fontsize=8, color=a_color, fontweight="500",
+                    ha="right", va="top",
+                    bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE,
+                              edgecolor=a_color, alpha=0.95, linewidth=0.7),
+                    zorder=8,
+                )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
     ax.set_title(title, fontsize=13, fontweight="700", color=TEXT, loc="left", pad=20)
