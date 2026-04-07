@@ -118,20 +118,20 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            futures = [executor.submit(_process_one, m) for m in self._metric_configs]
-            for future in as_completed(futures):
+        with ThreadPoolExecutor(max_workers=16) as executor:
+            steep_futures = [executor.submit(_process_one, m) for m in self._metric_configs]
+            bq_future = executor.submit(self.check_bq_metrics)
+
+            for future in as_completed(steep_futures):
                 try:
                     anomalies.extend(future.result())
                 except Exception as e:
                     logger.error("Unhandled error in metric worker: %s", e)
 
-        # Also check BQ-sourced metrics
-        try:
-            bq_anomalies = self.check_bq_metrics()
-            anomalies.extend(bq_anomalies)
-        except Exception as e:
-            logger.error("BQ metric check failed: %s", e)
+            try:
+                anomalies.extend(bq_future.result())
+            except Exception as e:
+                logger.error("BQ metric check failed: %s", e)
 
         return anomalies
 
@@ -524,7 +524,7 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
+        with ThreadPoolExecutor(max_workers=16) as executor:
             futures = [executor.submit(_process_one, m) for m in configs]
             for future in as_completed(futures):
                 try:
