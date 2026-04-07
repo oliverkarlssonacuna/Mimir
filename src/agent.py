@@ -621,6 +621,7 @@ class Agent:
                     system_instruction=active_system_prompt,
                     tools=[_get_tools()],
                     temperature=0,
+                    max_output_tokens=2048,
                 ),
             )
 

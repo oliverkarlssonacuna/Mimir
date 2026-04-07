@@ -688,41 +688,55 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             import json as _json
             steep_json = _json.dumps(steep_data)
 
-            # Build prompt with pre-fetched data — Gemini only needs to plot + analyse
+            # Pre-render chart — no need for Gemini to call plot_results
+            from agent import _plot_results
+            chart_path = _plot_results(
+                data_json=steep_json,
+                chart_type="line",
+                x_col="date",
+                y_col="value",
+                title=metric_info["metric_label"],
+                anomaly_date=reference_date,
+                baseline_date=baseline_date or "",
+                baseline_date_2=baseline_date_2 or "",
+            )
+            pre_chart = chart_path if not chart_path.startswith("error") else None
+
+            # Single Gemini call — only analysis, no tool calls needed
             prompt = (
                 f"Today's date: {today}\n"
-                f"Do a detailed analysis of the metric {metric_info['metric_label']} (id: {metric_id}).\n"
+                f"Analyse the metric **{metric_info['metric_label']}** (id: {metric_id}).\n"
                 f"Direction: {metric_info['direction']}\n"
                 f"Anomalies detected on {reference_date} via: {triggered_comparisons}\n"
                 f"{anomaly_detail}\n\n"
-                f"## Pre-fetched daily data (from {baseline} to {reference_date}):\n"
+                f"## Daily data (from {baseline} to {reference_date}):\n"
                 f"{steep_json}\n\n"
                 f"## Jira releases:\n{jira_context}\n\n"
-                "Steps:\n"
-                f"1. Draw a line chart with plot_results using the data above. Use anomaly_date=\"{reference_date}\" to mark the anomaly. "
-                + (f"Use baseline_date=\"{baseline_date}\" to mark the WoW/Pace baseline (yellow). " if baseline_date else "")
-                + (f"Use baseline_date_2=\"{baseline_date_2}\" to mark the DoD baseline (green)." if baseline_date_2 else "")
-                + "\n"
-                f"2. Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
+                "A chart has already been generated and attached.\n\n"
+                f"Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
                 "Consider the Jira releases above. Provide possible causes and a recommendation.\n"
             )
 
             loop = asyncio.get_running_loop()
             response = await loop.run_in_executor(None, agent.ask, prompt)
 
-            if response.chart_path:
-                text = response.text or "Here is the analysis:"
+            text = response.text or "Here is the analysis:"
+            # Use pre-rendered chart, fall back to agent chart if pre-render failed
+            final_chart = pre_chart or response.chart_path
+            if final_chart:
                 chunks = split_message(text)
                 await thread.send(
                     content=chunks[0],
-                    file=discord.File(response.chart_path, filename="chart.png"),
+                    file=discord.File(final_chart, filename="chart.png"),
                 )
                 for chunk in chunks[1:]:
                     await thread.send(content=chunk)
-                try:
-                    os.remove(response.chart_path)
-                except OSError:
-                    pass
+                for p in (pre_chart, response.chart_path):
+                    if p:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
             else:
                 for chunk in split_message(response.text):
                     await thread.send(content=chunk)
