@@ -521,45 +521,28 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _annotations.append((b_idx, ys[b_idx], GREEN, _pct_change_label("DoD", ys[b_idx])))
 
     # ── Draw annotations cleanly ─────────────────────────────────────────
-    y_min, y_max = ax.get_ylim() if ys else (0, 1)
-    if ys:
-        y_min, y_max = min(ys), max(ys)
-    label_y_top = y_max * 1.08 if y_max > 0 else 1
+    if _annotations and ys:
+        # Dots on data points
+        for a_idx, a_y, a_color, _a_text in _annotations:
+            ax.plot(a_idx, a_y, "o", color=a_color, markersize=6, zorder=7,
+                    markeredgecolor=SURFACE, markeredgewidth=1.5)
 
-    n_points = len(xs) if xs else 1
-    for i, (a_idx, a_y, a_color, a_text) in enumerate(_annotations):
-        # Thin vertical line from data point to top label area
-        ax.vlines(a_idx, a_y, label_y_top, color=a_color, linewidth=0.8, alpha=0.4, zorder=5)
-        # Small clean dot on data point
-        ax.plot(a_idx, a_y, "o", color=a_color, markersize=6, zorder=7,
-                markeredgecolor=SURFACE, markeredgewidth=1.5)
-        # Smart alignment: avoid pills clipping at edges
-        rel_pos = a_idx / max(n_points - 1, 1)  # 0..1
-        if rel_pos > 0.8:
-            h_align, x_off = "right", -8
-        elif rel_pos < 0.2:
-            h_align, x_off = "left", 8
-        else:
-            h_align, x_off = "center", 0
-        # Label at top — pill style
-        ax.annotate(
-            a_text,
-            xy=(a_idx, label_y_top),
-            xytext=(x_off, 6 + i * 18), textcoords="offset points",
-            fontsize=8, color=a_color, fontweight="500",
-            ha=h_align, va="bottom",
-            bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE, edgecolor=a_color, alpha=0.95, linewidth=0.7),
-            zorder=8,
-        )
+        # Legend block — stacked pills in top-right corner
+        # Use axes-relative coordinates so they never clip
+        for i, (_a_idx, _a_y, a_color, a_text) in enumerate(_annotations):
+            ax.annotate(
+                a_text,
+                xy=(1, 1), xycoords="axes fraction",
+                xytext=(-10, -10 - i * 22), textcoords="offset points",
+                fontsize=8, color=a_color, fontweight="500",
+                ha="right", va="top",
+                bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE, edgecolor=a_color, alpha=0.95, linewidth=0.7),
+                zorder=8,
+            )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
     ax.set_title(title, fontsize=13, fontweight="700", color=TEXT, loc="left", pad=20)
     ax.set_xlabel("")
-
-    # Extend y-axis slightly to make room for annotation pills
-    if _annotations and ys:
-        y_pad = (y_max - y_min) * 0.18 * (1 + 0.12 * len(_annotations))
-        ax.set_ylim(min(ys) - (y_max - y_min) * 0.04, y_max + y_pad)
 
     fig.tight_layout(pad=2.5)
 
