@@ -591,7 +591,7 @@ class Agent:
         self.model = config.GEMINI_MODEL
         self._percent_metric_ids: set[str] = percent_metric_ids or set()
 
-    def ask(self, question: str, system_prompt: str | None = None) -> AgentResponse:
+    def ask(self, question: str, system_prompt: str | None = None, tools_enabled: bool = True) -> AgentResponse:
         """Send a question through the agentic loop and return the final answer."""
         active_system_prompt = system_prompt or SYSTEM_PROMPT
         contents: list[types.Content] = [
@@ -599,6 +599,23 @@ class Agent:
         ]
 
         chart_path: str | None = None
+
+        # No-tools fast path: single Gemini call, no agentic loop
+        if not tools_enabled:
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=active_system_prompt,
+                    temperature=0,
+                    max_output_tokens=2048,
+                ),
+            )
+            candidate = response.candidates[0]
+            parts = candidate.content.parts if candidate.content and candidate.content.parts else []
+            text_parts = [p.text for p in parts if p.text]
+            return AgentResponse(text="\n".join(text_parts).strip() or "Here is the analysis:")
+
         max_iterations = 10
 
         for iteration in range(max_iterations):

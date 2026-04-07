@@ -723,7 +723,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             )
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(None, agent.ask, prompt)
+            response = await loop.run_in_executor(None, lambda: agent.ask(prompt, tools_enabled=False))
 
             text = response.text or "Here is the analysis:"
             # Use pre-rendered chart, fall back to agent chart if pre-render failed
