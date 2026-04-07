@@ -323,16 +323,17 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
     highlighted = {v.strip() for v in highlight_values.split(",") if v.strip()} if highlight_values else set()
 
-    # ── Mimir color palette (matches admin page) ──────────────────────────
+    # ── Mimir color palette ─────────────────────────────────────────────
     BG = "#0b0d11"
-    SURFACE = "#12141a"
-    BORDER = "#2a2d38"
-    GRID = "#1e2028"
+    SURFACE = "#111318"
+    BORDER = "#1e2028"
+    GRID = "#1a1c24"
     TEXT = "#f1f5f9"
     TEXT_MUTED = "#cbd5e1"
-    TEXT_DIM = "#cbd5e1"
-    ACCENT = "#6366f1"       # indigo-500 — primary line
-    RED = "#f87171"          # red-400 — anomaly
+    TEXT_DIM = "#94a3b8"
+    ACCENT = "#818cf8"       # indigo-400 — primary line
+    ACCENT_GLOW = "#6366f1"  # indigo-500 — fill
+    RED = "#fb7185"          # rose-400 — anomaly
     YELLOW = "#fbbf24"       # amber-400 — WoW baseline
     GREEN = "#34d399"        # emerald-400 — DoD baseline
     ACCENT_COLORS = [ACCENT, RED, GREEN, YELLOW, "#f472b6", "#22d3ee"]
@@ -342,18 +343,16 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(SURFACE)
 
-    # Clean spines — only subtle bottom line
+    # No spines at all — clean edge
     for spine in ax.spines.values():
         spine.set_visible(False)
-    ax.spines["bottom"].set_visible(True)
-    ax.spines["bottom"].set_color(BORDER)
-    ax.spines["bottom"].set_linewidth(0.8)
 
-    # Ticks
-    ax.tick_params(axis="both", colors=TEXT_DIM, labelsize=9, length=0, pad=8)
+    # Ticks — clean, readable
+    ax.tick_params(axis="x", colors=TEXT_DIM, labelsize=8.5, length=0, pad=10)
+    ax.tick_params(axis="y", colors=TEXT_DIM, labelsize=9, length=0, pad=6)
 
-    # Horizontal grid — very subtle
-    ax.grid(axis="y", linestyle="-", alpha=0.3, color=GRID, linewidth=0.6, zorder=0)
+    # Horizontal grid — barely visible
+    ax.grid(axis="y", linestyle="-", alpha=0.15, color="#ffffff", linewidth=0.5, zorder=0)
     ax.set_axisbelow(True)
 
     # Y-axis formatter
@@ -430,11 +429,14 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _thin_ticks(ax, xs)
 
         elif chart_type == "line":
-            # Main line
-            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.5, zorder=3, solid_capstyle="round")
-            # Gradient fill
+            # Main line — smooth, no markers
+            ax.plot(x_indices, ys, color=ACCENT, linewidth=2, zorder=4, solid_capstyle="round")
+            # Gradient fill under line
             import numpy as np
-            ax.fill_between(x_indices, ys, alpha=0.20, color=ACCENT, zorder=2)
+            from matplotlib.colors import LinearSegmentedColormap
+            # Two-layer fill for depth
+            ax.fill_between(x_indices, ys, alpha=0.15, color=ACCENT_GLOW, zorder=2)
+            ax.fill_between(x_indices, 0, ys, alpha=0.05, color=ACCENT_GLOW, zorder=1)
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -444,7 +446,17 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             ax.bar(x_indices, ys, color=ACCENT, alpha=0.85)
             _thin_ticks(ax, xs)
 
-    # ── Anomaly marker ────────────────────────────────────────────────────
+    # ── Helper: format value for labels ─────────────────────────────────
+    def _fmt_val(v):
+        if abs(v) >= 10:
+            return f"{v:,.0f}"
+        if abs(v) >= 0.01:
+            return f"{v:.2f}"
+        return f"{v:.4f}"
+
+    # ── Collect all annotation points to avoid overlap ────────────────────
+    _annotations = []  # list of (idx, y, color, line1, line2)
+
     if anomaly_date and chart_type != "pie":
         search_xs = all_xs if (group_col and group_col in data[0]) else xs
         anomaly_idx = None
@@ -453,29 +465,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 anomaly_idx = idx
                 break
         if anomaly_idx is not None and chart_type == "line" and ys is not None:
-            anomaly_y = ys[anomaly_idx]
-            # Subtle vertical line
-            ax.axvline(x=anomaly_idx, color=RED, linestyle=":", linewidth=1.2, alpha=0.5, zorder=2)
-            # Dot
-            ax.plot(anomaly_idx, anomaly_y, "o", color=RED, markersize=9, zorder=6,
-                    markeredgecolor=BG, markeredgewidth=2)
-            # Label
-            label_text = anomaly_date[5:]  # "04-06" instead of "2026-04-06"
-            val_text = f"{anomaly_y:,.0f}" if anomaly_y >= 10 else (f"{anomaly_y:.2f}" if anomaly_y >= 0.01 else f"{anomaly_y:.4f}")
-            ax.annotate(
-                f"{label_text}\n{val_text}",
-                xy=(anomaly_idx, anomaly_y),
-                xytext=(12, 8), textcoords="offset points",
-                fontsize=8.5, color=RED, fontweight="600",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=RED, alpha=0.95, linewidth=0.8),
-                zorder=7,
-            )
-        elif anomaly_idx is not None:
-            ax.axvline(x=anomaly_idx, color=RED, linestyle=":", linewidth=1.2, alpha=0.5, zorder=2)
+            _annotations.append((anomaly_idx, ys[anomaly_idx], RED, "Anomaly", f"{anomaly_date[5:]}  ·  {_fmt_val(ys[anomaly_idx])}"))
 
-    # ── Baseline markers ──────────────────────────────────────────────────
-    def _draw_baseline(baseline_dt: str, color: str, label_prefix: str, y_offset: int):
-        """Draw a baseline dot + label."""
+    def _find_baseline_idx(baseline_dt):
         search_xs_b = all_xs if (group_col and group_col in data[0]) else xs
         b_idx = None
         for idx, lbl in enumerate(search_xs_b):
@@ -499,35 +491,54 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                     b_idx = best_idx
             except ValueError:
                 pass
-        if b_idx is not None and ys is not None:
-            b_y = ys[b_idx]
-            ax.plot(b_idx, b_y, "o", color=color, markersize=9, zorder=6,
-                    markeredgecolor=BG, markeredgewidth=2)
-            actual_date = search_xs_b[b_idx][:10]
-            ax.annotate(
-                f"{label_prefix}\n{actual_date[5:]}",
-                xy=(b_idx, b_y),
-                xytext=(12, y_offset), textcoords="offset points",
-                fontsize=8, color=color, fontweight="600",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor=BG, edgecolor=color, alpha=0.95, linewidth=0.8),
-                zorder=7,
-            )
+        return b_idx
 
-    if baseline_date and chart_type == "line":
-        _draw_baseline(baseline_date, YELLOW, "WoW", 10)
-    if baseline_date_2 and chart_type == "line":
-        _draw_baseline(baseline_date_2, GREEN, "DoD", -20)
+    if baseline_date and chart_type == "line" and ys is not None:
+        b_idx = _find_baseline_idx(baseline_date)
+        if b_idx is not None:
+            _annotations.append((b_idx, ys[b_idx], YELLOW, "WoW baseline", f"{xs[b_idx][:10][5:]}  ·  {_fmt_val(ys[b_idx])}"))
+
+    if baseline_date_2 and chart_type == "line" and ys is not None:
+        b_idx = _find_baseline_idx(baseline_date_2)
+        if b_idx is not None:
+            _annotations.append((b_idx, ys[b_idx], GREEN, "DoD baseline", f"{xs[b_idx][:10][5:]}  ·  {_fmt_val(ys[b_idx])}"))
+
+    # ── Draw annotations cleanly ─────────────────────────────────────────
+    y_min, y_max = ax.get_ylim() if ys else (0, 1)
+    if ys:
+        y_min, y_max = min(ys), max(ys)
+    label_y_top = y_max * 1.08 if y_max > 0 else 1
+
+    for i, (a_idx, a_y, a_color, a_label, a_detail) in enumerate(_annotations):
+        # Thin vertical line from data point to top label area
+        ax.vlines(a_idx, a_y, label_y_top, color=a_color, linewidth=0.8, alpha=0.4, zorder=5)
+        # Small clean dot on data point
+        ax.plot(a_idx, a_y, "o", color=a_color, markersize=6, zorder=7,
+                markeredgecolor=SURFACE, markeredgewidth=1.5)
+        # Label at top — pill style
+        ax.annotate(
+            f"{a_label}   {a_detail}",
+            xy=(a_idx, label_y_top),
+            xytext=(0, 6 + i * 18), textcoords="offset points",
+            fontsize=8, color=a_color, fontweight="500",
+            ha="center", va="bottom",
+            bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE, edgecolor=a_color, alpha=0.95, linewidth=0.7),
+            zorder=8,
+        )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
-    ax.set_title(title, fontsize=14, fontweight="600", color=TEXT, loc="left", pad=16)
-
-    # Remove x-label ("Date" is obvious)
+    ax.set_title(title, fontsize=13, fontweight="700", color=TEXT, loc="left", pad=20)
     ax.set_xlabel("")
 
-    fig.tight_layout(pad=2.0)
+    # Extend y-axis slightly to make room for annotation pills
+    if _annotations and ys:
+        y_pad = (y_max - y_min) * 0.18 * (1 + 0.12 * len(_annotations))
+        ax.set_ylim(min(ys) - (y_max - y_min) * 0.04, y_max + y_pad)
+
+    fig.tight_layout(pad=2.5)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="mimir_chart_")
-    fig.savefig(tmp.name, dpi=170, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    fig.savefig(tmp.name, dpi=180, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
     logger.info("Chart saved to %s", tmp.name)
     return tmp.name
