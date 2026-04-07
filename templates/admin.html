@@ -16,6 +16,11 @@
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <!-- CodeMirror -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.css">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/theme/dracula.min.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/codemirror.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.16/mode/sql/sql.min.js"></script>
   <style>
     body { font-family: 'Inter', system-ui, sans-serif; background-color: #13151a; color: #e2e8f0; }
     .threshold-cell { transition: background-color 0.15s, color 0.15s, border-color 0.15s; }
@@ -63,17 +68,33 @@
 
       <!-- Brand -->
       <div class="flex items-center gap-3">
-        <div class="w-9 h-9 rounded-full flex items-center justify-center flex-shrink-0" style="background:#fff;">
-          <img src="/static/logo.png" alt="Mimir" class="w-6 h-6 object-contain;">
+        <div class="relative w-9 h-9 flex-shrink-0">
+          <div class="w-9 h-9 rounded-full flex items-center justify-center" style="background:#fff;">
+            <img src="/static/logo.png" alt="Mimir" class="w-6 h-6 object-contain;">
+          </div>
+          <!-- Status dot on logo -->
+          <span id="logo-status-dot"
+            class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 flex items-center justify-center"
+            style="border-color:#1c1f27; background:#3a3f4d;"
+            title="Checking bot status…">
+          </span>
         </div>
         <div>
           <p class="text-sm font-semibold text-white leading-none">Mimir</p>
-          <p class="text-xs mt-0.5" style="color:#6b7385;">Admin Dashboard</p>
+          <p class="text-xs mt-0.5" id="header-status-label" style="color:#6b7385;">Admin Dashboard</p>
         </div>
       </div>
 
       <!-- User -->
       <div class="flex items-center gap-5">
+        <!-- Bot status badge -->
+        <div id="bot-status-badge"
+          class="hidden items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border"
+          style="border-color:#2a2d38; background:#13151a; color:#6b7385;">
+          <span id="bot-status-dot" class="w-1.5 h-1.5 rounded-full" style="background:#3a3f4d;"></span>
+          <span id="bot-status-text">—</span>
+        </div>
+
         <!-- Restart button -->
         <button id="restart-btn"
           onclick="restartMimir()"
@@ -108,12 +129,42 @@
   <!-- ── Main ──────────────────────────────────────────────────────────────── -->
   <main class="max-w-screen-xl mx-auto px-6 py-8">
 
+    <!-- Tab navigation -->
+    <div class="flex items-center gap-1 mb-6 border-b" style="border-color:#2a2d38;">
+      <button onclick="switchTab('steep')" id="tab-steep"
+        class="tab-btn px-5 py-3 text-sm font-medium transition-colors border-b-2"
+        style="color:#818cf8; border-color:#818cf8;">
+        Steep Metrics
+      </button>
+      <button onclick="switchTab('bq')" id="tab-bq"
+        class="tab-btn px-5 py-3 text-sm font-medium transition-colors border-b-2"
+        style="color:#6b7385; border-color:transparent;">
+        BQ Metrics
+      </button>
+    </div>
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB: Steep Metrics                                                     -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="panel-steep">
+
     <!-- Page title -->
-    <div class="mb-6">
-      <h1 class="text-xl font-semibold text-white">Alert Thresholds</h1>
-      <p class="text-sm mt-1" style="color:#6b7385;">
-        Click any threshold value to edit it. Changes are saved instantly to BigQuery. Use <strong style="color:#f59e0b;">Restart Mimir</strong> to clear alert history and trigger an immediate check.
-      </p>
+    <div class="mb-6 flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-semibold text-white">Steep Metrics</h1>
+        <p class="text-sm mt-1" style="color:#6b7385;">
+          Click any threshold value to edit it. Changes are saved instantly.
+        </p>
+      </div>
+      <button onclick="openAddSteepModal()"
+        class="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+        style="background:#4f46e5; color:#fff;"
+        onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+        Add Steep Metric
+      </button>
     </div>
 
     <!-- Stats -->
@@ -374,7 +425,291 @@
 
     </div><!-- /table card -->
 
+    </div><!-- /panel-steep -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB: BQ Metrics                                                       -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="panel-bq" class="hidden">
+
+    <!-- Page title -->
+    <div class="mb-6 flex items-center justify-between">
+      <div>
+        <h1 class="text-xl font-semibold text-white">BQ Metrics</h1>
+        <p class="text-sm mt-1" style="color:#6b7385;">
+          Monitor BigQuery tables or custom queries with pace/DoD/WoW anomaly detection.
+        </p>
+      </div>
+      <button onclick="openAddBqModal()"
+        class="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+        style="background:#4f46e5; color:#fff;"
+        onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+        </svg>
+        Add BQ Metric
+      </button>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-3 gap-4 mb-6">
+      <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+        <p class="text-xs font-medium uppercase tracking-wide" style="color:#6b7385;">Total Monitors</p>
+        <p class="text-3xl font-bold text-white mt-1 tabular-nums" id="bq-total">{{ bq_total_count }}</p>
+      </div>
+      <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+        <p class="text-xs font-medium uppercase tracking-wide" style="color:#6b7385;">Active</p>
+        <p class="text-3xl font-bold mt-1 tabular-nums" style="color:#34d399;" id="bq-active">{{ bq_active_count }}</p>
+      </div>
+      <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+        <p class="text-xs font-medium uppercase tracking-wide" style="color:#6b7385;">Inactive</p>
+        <p class="text-3xl font-bold mt-1 tabular-nums" style="color:#4f5668;" id="bq-inactive">{{ bq_total_count - bq_active_count }}</p>
+      </div>
+    </div>
+
+    <!-- BQ Metrics table card -->
+    <div class="rounded-xl border overflow-hidden shadow-xl" style="background:#1c1f27; border-color:#2a2d38;">
+      <div class="overflow-x-auto">
+        <table class="w-full text-sm" id="bq-table">
+          <thead>
+            <tr class="border-b" style="border-color:#2a2d38; background:#171a21;">
+              <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Metric</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Direction</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Pace %</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">DoD %</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">WoW %</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Status</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="bq-table-body">
+            {% for m in bq_monitors %}
+            <tr class="group border-b transition-colors" style="border-color:#1e2028;"
+                onmouseover="this.style.background='#20232c'" onmouseout="this.style.background=''">
+
+              <!-- Metric name -->
+              <td class="px-6 py-4">
+                <div class="font-medium text-white leading-tight">{{ m.metric_label }}</div>
+                <div class="text-xs mt-0.5" style="color:#6b7385;">{{ m.metric_id }}</div>
+              </td>
+
+              <!-- Direction badge -->
+              <td class="px-4 py-4 whitespace-nowrap">
+                {% if m.direction == "alert_on_rise" %}
+                <span class="direction-badge inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer"
+                      style="background:#2d1d20; color:#f87171; border:1px solid #3d2022;"
+                      data-metric="{{ m.metric_id }}" data-direction="alert_on_rise"
+                      onclick="toggleBqDirection(this)">
+                  <svg class="w-3 h-3 direction-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 15l7-7 7 7"/>
+                  </svg>
+                  <span class="badge-label">Rise alert</span>
+                </span>
+                {% else %}
+                <span class="direction-badge inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium cursor-pointer"
+                      style="background:#1a1f35; color:#818cf8; border:1px solid #252b45;"
+                      data-metric="{{ m.metric_id }}" data-direction="alert_on_drop"
+                      onclick="toggleBqDirection(this)">
+                  <svg class="w-3 h-3 direction-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                  </svg>
+                  <span class="badge-label">Drop alert</span>
+                </span>
+                {% endif %}
+              </td>
+
+              <!-- Threshold cells -->
+              {% for comp, val in [("pace", m.pace_threshold), ("dod", m.dod_threshold), ("wow", m.wow_threshold)] %}
+              <td class="px-4 py-4 text-center">
+                <span class="threshold-cell bq-threshold inline-block min-w-[64px] px-3 py-1.5 rounded-lg text-sm font-medium tabular-nums cursor-pointer border"
+                      style="background:#13151a; color:#9aa0b4; border-color:#2a2d38;"
+                      data-metric="{{ m.metric_id }}"
+                      data-comparison="{{ comp }}"
+                      data-value="{{ ((val or 0) * 100) | round(1) }}"
+                      onclick="startBqEdit(this)">
+                  {{ ((val or 0) * 100) | round(1) }}%
+                </span>
+              </td>
+              {% endfor %}
+
+              <!-- Status toggle -->
+              <td class="px-4 py-4 text-center">
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only"
+                         data-metric="{{ m.metric_id }}"
+                         {{ 'checked' if m.enabled else '' }}
+                         onchange="toggleBqMonitor('{{ m.metric_id }}', this.checked, this)">
+                  <div class="w-10 h-5 rounded-full relative transition-colors"
+                       style="background:{{ '#4f46e5' if m.enabled else '#2a2d38' }};"
+                       id="bq-toggle-track-{{ m.metric_id }}">
+                    <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
+                         style="left:{{ '22px' if m.enabled else '2px' }};"
+                         id="bq-toggle-thumb-{{ m.metric_id }}"></div>
+                  </div>
+                </label>
+              </td>
+
+              <!-- Delete -->
+              <td class="px-4 py-4 text-center">
+                <button onclick="deleteBqMonitor('{{ m.metric_id }}', '{{ m.metric_label }}')"
+                  class="text-xs font-medium px-3 py-1.5 rounded-lg border transition-colors"
+                  style="color:#f87171; border-color:#3d2022; background:#1c1810;"
+                  onmouseover="this.style.background='#2d1d20'" onmouseout="this.style.background='#1c1810'">
+                  Delete
+                </button>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Empty state for BQ metrics -->
+      {% if not bq_monitors %}
+      <div class="py-16 text-center">
+        <svg class="mx-auto w-10 h-10 mb-3" style="color:#2a2d38;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5"
+            d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4m0 5c0 2.21-3.582 4-8 4s-8-1.79-8-4"/>
+        </svg>
+        <p class="text-sm" style="color:#4f5668;">No BQ metrics yet. Click "Add BQ Metric" to get started.</p>
+      </div>
+      {% endif %}
+
+    </div><!-- /bq table card -->
+
+    </div><!-- /panel-bq -->
+
   </main>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Add Steep Metric                                                -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="modal-add-steep" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-lg mx-4 overflow-hidden"
+         style="background:#1c1f27; border-color:#2a2d38;">
+      <div class="px-6 py-4 border-b flex items-center justify-between" style="border-color:#2a2d38;">
+        <h2 class="text-lg font-semibold text-white">Add Steep Metric</h2>
+        <button onclick="closeModal('modal-add-steep')" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="px-6 py-5 space-y-4">
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Steep Metric *</label>
+          <div class="relative">
+            <input type="text" id="steep-search" placeholder="Search metrics…" autocomplete="off"
+              class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
+              style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
+              onfocus="showSteepDropdown()" oninput="filterSteepDropdown()">
+            <div id="steep-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 max-h-52 overflow-y-auto rounded-lg border shadow-xl z-10"
+                 style="background:#1c1f27; border-color:#2a2d38;">
+              <div id="steep-dropdown-loading" class="px-4 py-3 text-xs" style="color:#6b7385;">Loading metrics from Steep…</div>
+              <div id="steep-dropdown-items"></div>
+            </div>
+          </div>
+          <input type="hidden" id="steep-metric-id">
+        </div>
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Label</label>
+          <input type="text" id="steep-label" placeholder="Auto-filled from Steep"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+        </div>
+
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Direction</label>
+          <select id="steep-direction"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none cursor-pointer"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+            <option value="alert_on_drop">Drop alert</option>
+            <option value="alert_on_rise">Rise alert</option>
+          </select>
+        </div>
+      </div>
+      <div class="px-6 py-4 border-t flex items-center justify-end gap-3" style="border-color:#2a2d38;">
+        <button onclick="closeModal('modal-add-steep')"
+          class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
+        <button onclick="submitAddSteep()" id="steep-submit-btn"
+          class="text-sm font-medium px-5 py-2 rounded-lg" style="background:#4f46e5; color:#fff;">Add Metric</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Add BQ Metric                                                  -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="modal-add-bq" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-2xl mx-4 overflow-hidden flex flex-col"
+         style="background:#1c1f27; border-color:#2a2d38; max-height:90vh;">
+      <div class="px-6 py-4 border-b flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
+        <h2 class="text-lg font-semibold text-white">Add BQ Metric</h2>
+        <button onclick="closeModal('modal-add-bq')" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div class="px-6 py-5 space-y-4 overflow-y-auto">
+
+        <!-- Catalog picker -->
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(or fill in manually below)</span></label>
+          <div class="relative">
+            <input type="text" id="bq-catalog-search" placeholder="Search catalog…" autocomplete="off"
+              class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
+              style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
+              onfocus="showBqCatalogDropdown()" oninput="filterBqCatalogDropdown()">
+            <div id="bq-catalog-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto rounded-lg border shadow-xl z-10"
+                 style="background:#1c1f27; border-color:#2a2d38;">
+              <div id="bq-catalog-loading" class="px-4 py-3 text-xs" style="color:#6b7385;">Loading catalog…</div>
+              <div id="bq-catalog-items"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Label -->
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Metric Name *</label>
+          <input type="text" id="bq-label" placeholder="e.g. Goals Scored per Match"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+        </div>
+
+        <!-- Direction -->
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Direction</label>
+          <select id="bq-direction"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none cursor-pointer"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+            <option value="alert_on_drop">Drop alert</option>
+            <option value="alert_on_rise">Rise alert</option>
+          </select>
+        </div>
+
+        <!-- SQL query -->
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">
+            SQL Query
+            <span class="ml-1 font-normal" style="color:#4f5668;">— must return columns <code style="color:#818cf8;">date</code> (DATE) and <code style="color:#818cf8;">value</code> (NUMERIC)</span>
+          </label>
+          <div id="bq-sql-editor" class="rounded-lg border overflow-hidden" style="border-color:#2a2d38;"></div>
+          <textarea id="bq-sql" class="hidden"></textarea>
+        </div>
+
+        <input type="hidden" id="bq-catalog-id">
+      </div>
+      <div class="px-6 py-4 border-t flex items-center justify-end gap-3 flex-shrink-0" style="border-color:#2a2d38;">
+        <button onclick="closeModal('modal-add-bq')"
+          class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
+        <button onclick="submitAddBq()" id="bq-submit-btn"
+          class="text-sm font-medium px-5 py-2 rounded-lg" style="background:#4f46e5; color:#fff;">Add Metric</button>
+      </div>
+    </div>
+  </div>
 
   <!-- ── Toast container ───────────────────────────────────────────────────── -->
   <div id="toast-container" class="fixed top-5 right-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
@@ -567,7 +902,7 @@
         if (r.ok) {
           label.textContent = 'Done!';
           icon.style.animation = '';
-          setTimeout(() => { label.textContent = 'Restart Mimir'; btn.disabled = false; }, 3000);
+          setTimeout(() => { label.textContent = 'Restart Mimir'; btn.disabled = false; updateBotStatus(); }, 3000);
         } else {
           label.textContent = 'Error';
           icon.style.animation = '';
@@ -579,6 +914,83 @@
         setTimeout(() => { label.textContent = 'Restart Mimir'; btn.disabled = false; }, 3000);
       }
     }
+
+    // ── Bot status polling ─────────────────────────────────────────────────────
+
+    function _fmtSeconds(secs) {
+      if (secs === null || secs === undefined) return null;
+      if (secs < 60) return `${secs}s`;
+      const m = Math.floor(secs / 60);
+      const s = secs % 60;
+      return s > 0 ? `${m}m ${s}s` : `${m}m`;
+    }
+
+    async function updateBotStatus() {
+      const badge     = document.getElementById('bot-status-badge');
+      const dot       = document.getElementById('bot-status-dot');
+      const text      = document.getElementById('bot-status-text');
+      const logoDot   = document.getElementById('logo-status-dot');
+      const subLabel  = document.getElementById('header-status-label');
+
+      try {
+        const resp = await fetch('/admin/bot-status');
+        const data = await resp.json();
+        badge.classList.remove('hidden');
+        badge.classList.add('flex');
+
+        if (data.running) {
+          // Online
+          dot.style.background = '#34d399';
+          logoDot.style.background = '#34d399';
+          logoDot.style.boxShadow = '0 0 0 2px rgba(52,211,153,0.3)';
+          logoDot.title = 'Bot is running';
+
+          const eta = _fmtSeconds(data.seconds_until_next_run);
+          if (eta) {
+            text.textContent = `Online · next check in ${eta}`;
+            subLabel.textContent = `Next check in ${eta}`;
+            subLabel.style.color = '#6b7385';
+          } else {
+            text.textContent = 'Online';
+            subLabel.textContent = 'Bot is running';
+            subLabel.style.color = '#6b7385';
+          }
+          badge.style.color = '#34d399';
+          badge.style.borderColor = '#064e3b';
+          badge.style.background = '#022c22';
+        } else {
+          // Offline
+          dot.style.background = '#f87171';
+          logoDot.style.background = '#f87171';
+          logoDot.style.boxShadow = '0 0 0 2px rgba(248,113,113,0.3)';
+          logoDot.title = 'Bot is offline';
+          text.textContent = 'Offline';
+          subLabel.textContent = 'Bot offline';
+          subLabel.style.color = '#f87171';
+          badge.style.color = '#f87171';
+          badge.style.borderColor = '#450a0a';
+          badge.style.background = '#1c0a0a';
+        }
+      } catch {
+        // Can't reach status endpoint
+        dot.style.background = '#f87171';
+        logoDot.style.background = '#f87171';
+        logoDot.style.boxShadow = '0 0 0 2px rgba(248,113,113,0.3)';
+        logoDot.title = 'Bot is offline';
+        badge.classList.remove('hidden');
+        badge.classList.add('flex');
+        text.textContent = 'Offline';
+        subLabel.textContent = 'Bot offline';
+        subLabel.style.color = '#f87171';
+        badge.style.color = '#f87171';
+        badge.style.borderColor = '#450a0a';
+        badge.style.background = '#1c0a0a';
+      }
+    }
+
+    // Poll on load and every 30 seconds
+    updateBotStatus();
+    setInterval(updateBotStatus, 30000);
 
     function handleEditKey(e, input) {
       if (e.key === 'Enter') {
@@ -973,6 +1385,487 @@
       const d = el.dataset.date;
       el.title       = d || '';
       el.textContent = _relativeDate(d);
+    });
+
+
+    // ── Tab switching ──────────────────────────────────────────────────────────
+
+    function switchTab(tab) {
+      document.getElementById('panel-steep').classList.toggle('hidden', tab !== 'steep');
+      document.getElementById('panel-bq').classList.toggle('hidden', tab !== 'bq');
+      document.getElementById('tab-steep').style.color = tab === 'steep' ? '#818cf8' : '#6b7385';
+      document.getElementById('tab-steep').style.borderColor = tab === 'steep' ? '#818cf8' : 'transparent';
+      document.getElementById('tab-bq').style.color = tab === 'bq' ? '#818cf8' : '#6b7385';
+      document.getElementById('tab-bq').style.borderColor = tab === 'bq' ? '#818cf8' : 'transparent';
+    }
+
+
+    // ── Steep metric dropdown ─────────────────────────────────────────────────
+
+    let _steepMetrics = null; // cached from API
+
+    async function _loadSteepMetrics() {
+      if (_steepMetrics !== null) return _steepMetrics;
+      try {
+        const r = await fetch('/api/steep/available-metrics');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        _steepMetrics = await r.json();
+      } catch (err) {
+        _steepMetrics = [];
+        showToast(`Could not load Steep metrics: ${err.message}`, true);
+      }
+      return _steepMetrics;
+    }
+
+    async function showSteepDropdown() {
+      const dropdown = document.getElementById('steep-dropdown');
+      const loading = document.getElementById('steep-dropdown-loading');
+      const items = document.getElementById('steep-dropdown-items');
+      dropdown.classList.remove('hidden');
+      loading.classList.remove('hidden');
+      items.innerHTML = '';
+
+      const metrics = await _loadSteepMetrics();
+      loading.classList.add('hidden');
+
+      if (metrics.length === 0) {
+        items.innerHTML = '<div class="px-4 py-3 text-xs" style="color:#6b7385;">No new metrics available.</div>';
+        return;
+      }
+      _renderSteepItems(metrics);
+    }
+
+    function _renderSteepItems(metrics) {
+      const items = document.getElementById('steep-dropdown-items');
+      items.innerHTML = '';
+      for (const m of metrics) {
+        const el = document.createElement('div');
+        el.className = 'px-4 py-2.5 text-sm cursor-pointer transition-colors';
+        el.style.cssText = 'color:#c8cdd8;';
+        el.onmouseenter = () => { el.style.background = '#20232c'; };
+        el.onmouseleave = () => { el.style.background = ''; };
+        el.innerHTML = `<div class="font-medium">${_escHtml(m.name)}</div><div class="text-xs mt-0.5" style="color:#4f5668;">${_escHtml(m.id)}</div>`;
+        el.onclick = () => selectSteepMetric(m);
+        items.appendChild(el);
+      }
+    }
+
+    function filterSteepDropdown() {
+      if (!_steepMetrics) return;
+      const q = document.getElementById('steep-search').value.toLowerCase().trim();
+      const filtered = q ? _steepMetrics.filter(m => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)) : _steepMetrics;
+      _renderSteepItems(filtered);
+      document.getElementById('steep-dropdown').classList.remove('hidden');
+    }
+
+    function selectSteepMetric(m) {
+      document.getElementById('steep-metric-id').value = m.id;
+      document.getElementById('steep-search').value = m.name;
+      document.getElementById('steep-label').value = m.name;
+      document.getElementById('steep-dropdown').classList.add('hidden');
+    }
+
+    function _escHtml(s) {
+      const d = document.createElement('div');
+      d.textContent = s;
+      return d.innerHTML;
+    }
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      const dropdown = document.getElementById('steep-dropdown');
+      const search = document.getElementById('steep-search');
+      if (dropdown && !dropdown.contains(e.target) && e.target !== search) {
+        dropdown.classList.add('hidden');
+      }
+    });
+
+
+    // ── Modals ─────────────────────────────────────────────────────────────────
+
+    function openAddSteepModal() {
+      document.getElementById('steep-search').value = '';
+      document.getElementById('steep-metric-id').value = '';
+      document.getElementById('steep-label').value = '';
+      _steepMetrics = null;
+      document.getElementById('modal-add-steep').classList.remove('hidden');
+    }
+    let _bqCatalog = null;
+    let _bqEditor = null;
+
+    function _getBqEditorValue() {
+      return _bqEditor ? _bqEditor.getValue() : document.getElementById('bq-sql').value;
+    }
+    function _setBqEditorValue(val) {
+      if (_bqEditor) _bqEditor.setValue(val);
+      else document.getElementById('bq-sql').value = val;
+    }
+
+    async function openAddBqModal() {
+      document.getElementById('bq-label').value = '';
+      document.getElementById('bq-direction').value = 'alert_on_drop';
+      document.getElementById('bq-catalog-id').value = '';
+      document.getElementById('bq-catalog-search').value = '';
+      document.getElementById('bq-catalog-dropdown').classList.add('hidden');
+      document.getElementById('modal-add-bq').classList.remove('hidden');
+
+      // Init CodeMirror once
+      if (!_bqEditor) {
+        _bqEditor = CodeMirror(document.getElementById('bq-sql-editor'), {
+          mode: 'text/x-sql',
+          theme: 'dracula',
+          lineNumbers: true,
+          indentWithTabs: false,
+          tabSize: 2,
+          autofocus: false,
+          lineWrapping: true,
+          extraKeys: { 'Tab': cm => cm.replaceSelection('  ') },
+        });
+        // Style overrides to blend with the UI
+        const wrapper = _bqEditor.getWrapperElement();
+        wrapper.style.fontSize = '12px';
+        wrapper.style.fontFamily = "'JetBrains Mono', 'Fira Mono', monospace";
+        wrapper.style.borderRadius = '8px';
+        wrapper.style.height = '180px';
+      }
+      _setBqEditorValue('');
+      setTimeout(() => _bqEditor && _bqEditor.refresh(), 50);
+
+      // Pre-fetch catalog
+      if (!_bqCatalog) {
+        try {
+          const resp = await fetch('/api/bq-monitors/catalog');
+          _bqCatalog = await resp.json();
+        } catch(e) {
+          _bqCatalog = [];
+        }
+      }
+    }
+
+    function showBqCatalogDropdown() {
+      if (!_bqCatalog) return;
+      document.getElementById('bq-catalog-dropdown').classList.remove('hidden');
+      renderBqCatalogItems(_bqCatalog);
+    }
+
+    function filterBqCatalogDropdown() {
+      if (!_bqCatalog) return;
+      const q = document.getElementById('bq-catalog-search').value.toLowerCase();
+      const filtered = _bqCatalog.filter(e =>
+        e.label.toLowerCase().includes(q) || e.category.toLowerCase().includes(q)
+      );
+      document.getElementById('bq-catalog-dropdown').classList.remove('hidden');
+      renderBqCatalogItems(filtered);
+    }
+
+    function renderBqCatalogItems(items) {
+      const loading = document.getElementById('bq-catalog-loading');
+      const container = document.getElementById('bq-catalog-items');
+      loading.classList.add('hidden');
+      container.innerHTML = '';
+      if (!items.length) {
+        container.innerHTML = '<div class="px-4 py-3 text-xs" style="color:#6b7385;">No results.</div>';
+        return;
+      }
+      // Group by category
+      const groups = {};
+      items.forEach(e => { (groups[e.category] = groups[e.category] || []).push(e); });
+      for (const [cat, entries] of Object.entries(groups)) {
+        const header = document.createElement('div');
+        header.className = 'px-4 py-1.5 text-xs font-semibold uppercase tracking-wide';
+        header.style.color = '#4f5668';
+        header.textContent = cat;
+        container.appendChild(header);
+        entries.forEach(e => {
+          const row = document.createElement('div');
+          row.className = 'px-4 py-2 text-sm cursor-pointer transition-colors';
+          row.style.color = '#c8cdd8';
+          row.textContent = e.label;
+          row.onmouseover = () => row.style.background = '#20232c';
+          row.onmouseout  = () => row.style.background = '';
+          row.onclick = () => selectBqCatalogItem(e);
+          container.appendChild(row);
+        });
+      }
+    }
+
+    function selectBqCatalogItem(entry) {
+      document.getElementById('bq-catalog-search').value = entry.label;
+      document.getElementById('bq-label').value = entry.label;
+      document.getElementById('bq-direction').value = entry.direction;
+      _setBqEditorValue(entry.sql_query);
+      document.getElementById('bq-catalog-id').value = entry.id;
+      document.getElementById('bq-catalog-dropdown').classList.add('hidden');
+    }
+
+    document.addEventListener('click', (e) => {
+      const dd = document.getElementById('bq-catalog-dropdown');
+      const input = document.getElementById('bq-catalog-search');
+      if (dd && input && !dd.contains(e.target) && e.target !== input) {
+        dd.classList.add('hidden');
+      }
+    });
+    function closeModal(id) {
+      document.getElementById(id).classList.add('hidden');
+    }
+    // Close modal on backdrop click
+    document.querySelectorAll('#modal-add-steep, #modal-add-bq').forEach(modal => {
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.add('hidden');
+      });
+    });
+
+
+    // ── Add Steep metric ───────────────────────────────────────────────────────
+
+    async function submitAddSteep() {
+      const btn = document.getElementById('steep-submit-btn');
+      const metricId = document.getElementById('steep-metric-id').value.trim();
+      const label    = document.getElementById('steep-label').value.trim();
+      const metricIdVal = document.getElementById('steep-metric-id').value.trim();
+      const steepUrl = metricIdVal ? `https://web.steep.app/FPxmrNPhps6x/metrics/${metricIdVal}` : '';
+      const direction    = document.getElementById('steep-direction').value;
+
+      if (!metricId || !label) {
+        showToast('Metric ID and Label are required.', true);
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+
+      try {
+        const resp = await fetch('/api/metrics/add', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metric_id: metricId, metric_label: label, steep_url: steepUrl, direction }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        showToast(`Added Steep metric: ${label}`);
+        closeModal('modal-add-steep');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        showToast(`Error: ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add Metric';
+      }
+    }
+
+
+    // ── Add BQ Metric ─────────────────────────────────────────────────────────
+
+    async function submitAddBq() {
+      const btn = document.getElementById('bq-submit-btn');
+      const label     = document.getElementById('bq-label').value.trim();
+      const direction = document.getElementById('bq-direction').value;
+      const sqlQuery  = _getBqEditorValue().trim();
+      const catalogId = document.getElementById('bq-catalog-id').value.trim();
+
+      if (!label) {
+        showToast('Metric name is required.', true);
+        return;
+      }
+
+      const payload = { metric_label: label, direction, sql_query: sqlQuery, catalog_id: catalogId || null };
+
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+
+      try {
+        const resp = await fetch('/api/bq-monitors', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        _bqCatalog = null; // invalidate cache so re-opening shows updated list
+        showToast(`Added BQ metric: ${label}`);
+        closeModal('modal-add-bq');
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        showToast(`Error: ${err.message}`, true);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Add Metric';
+      }
+    }
+
+
+    // ── BQ Metric threshold editing ────────────────────────────────────────────
+
+    function startBqEdit(cell) {
+      if (_activeInput) cancelEdit();
+
+      const currentValue = cell.dataset.value;
+      const metricId    = cell.dataset.metric;
+      const comparison   = cell.dataset.comparison;
+
+      cell.innerHTML = `
+        <input type="number" min="0.1" max="100" step="0.1"
+               value="${currentValue}"
+               class="w-[72px] px-2 py-1 text-sm text-center
+                      border-2 border-indigo-500 rounded-lg bg-white
+                      outline-none focus:ring-0 tabular-nums"
+               onkeydown="handleBqEditKey(event, this)"
+               onblur="commitBqEdit(this)">`;
+
+      const input = cell.querySelector('input');
+      input._cell          = cell;
+      input._metricId     = metricId;
+      input._comparison    = comparison;
+      input._originalValue = currentValue;
+
+      input.select();
+      _activeInput = input;
+    }
+
+    function handleBqEditKey(e, input) {
+      if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+      if (e.key === 'Escape') { e.preventDefault(); _activeInput = null; restoreCell(input._cell, input._originalValue); }
+    }
+
+    async function commitBqEdit(input) {
+      if (_activeInput !== input) return;
+      _activeInput = null;
+
+      const newValue = parseFloat(input.value);
+      const cell = input._cell;
+      const metricId = input._metricId;
+      const comparison = input._comparison;
+      const originalValue = input._originalValue;
+
+      if (isNaN(newValue) || newValue <= 0 || newValue > 100) {
+        restoreCell(cell, originalValue);
+        showToast('Value must be between 0.1 and 100 (%)', true);
+        return;
+      }
+      if (Math.abs(newValue - parseFloat(originalValue)) < 0.005) {
+        restoreCell(cell, originalValue);
+        return;
+      }
+
+      cell.innerHTML = `<span class="text-indigo-400 animate-pulse">${newValue.toFixed(1)}%</span>`;
+
+      try {
+        const resp = await fetch(`/api/bq-monitors/${encodeURIComponent(metricId)}/threshold`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ comparison, value: newValue }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        cell.dataset.value = newValue;
+        restoreCell(cell, newValue);
+        cell.style.background = '#1a2d25'; cell.style.color = '#34d399'; cell.style.borderColor = '#1e3d30';
+        setTimeout(() => { cell.style.background = '#13151a'; cell.style.color = '#9aa0b4'; cell.style.borderColor = '#2a2d38'; }, 1600);
+        showToast(`${comparison.toUpperCase()} threshold → ${newValue.toFixed(1)}%`);
+        showChangeBanner();
+      } catch (err) {
+        restoreCell(cell, originalValue);
+        showToast(`Failed: ${err.message}`, true);
+      }
+    }
+
+
+    // ── BQ Metric toggle ───────────────────────────────────────────────────────
+
+    async function toggleBqMonitor(metricId, enabled, checkbox) {
+      checkbox.disabled = true;
+      const track = document.getElementById(`bq-toggle-track-${metricId}`);
+      const thumb = document.getElementById(`bq-toggle-thumb-${metricId}`);
+      try {
+        const resp = await fetch(`/api/bq-monitors/${encodeURIComponent(metricId)}/toggle`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ enabled }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        if (track) track.style.background = enabled ? '#4f46e5' : '#2a2d38';
+        if (thumb) thumb.style.left = enabled ? '22px' : '2px';
+        showToast(`Metric ${enabled ? 'enabled' : 'disabled'}`);
+        showChangeBanner();
+      } catch (err) {
+        checkbox.checked = !enabled;
+        showToast(`Failed: ${err.message}`, true);
+      } finally {
+        checkbox.disabled = false;
+      }
+    }
+
+
+    // ── BQ Metric direction toggle ─────────────────────────────────────────────
+
+    async function toggleBqDirection(badge) {
+      const metricId = badge.dataset.metric;
+      const current = badge.dataset.direction;
+      const next = current === 'alert_on_rise' ? 'alert_on_drop' : 'alert_on_rise';
+      badge.style.opacity = '0.5'; badge.style.pointerEvents = 'none';
+      try {
+        const resp = await fetch(`/api/bq-monitors/${encodeURIComponent(metricId)}/direction`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ direction: next }),
+        });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        badge.dataset.direction = next;
+        const arrow = badge.querySelector('.direction-arrow path');
+        const label = badge.querySelector('.badge-label');
+        if (next === 'alert_on_rise') {
+          badge.style.background = '#2d1d20'; badge.style.color = '#f87171'; badge.style.border = '1px solid #3d2022';
+          if (arrow) arrow.setAttribute('d', 'M5 15l7-7 7 7');
+          if (label) label.textContent = 'Rise alert';
+        } else {
+          badge.style.background = '#1a1f35'; badge.style.color = '#818cf8'; badge.style.border = '1px solid #252b45';
+          if (arrow) arrow.setAttribute('d', 'M19 9l-7 7-7-7');
+          if (label) label.textContent = 'Drop alert';
+        }
+        showToast(`Direction → ${next === 'alert_on_rise' ? 'Rise alert' : 'Drop alert'}`);
+        showChangeBanner();
+      } catch (err) {
+        showToast(`Failed: ${err.message}`, true);
+      } finally {
+        badge.style.opacity = '1'; badge.style.pointerEvents = '';
+      }
+    }
+
+
+    // ── Delete BQ Metric ───────────────────────────────────────────────────────
+
+    async function deleteBqMonitor(metricId, label) {
+      if (!confirm(`Delete metric "${label}"?`)) return;
+      try {
+        const resp = await fetch(`/api/bq-monitors/${encodeURIComponent(metricId)}`, { method: 'DELETE' });
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+        showToast(`Deleted: ${label}`);
+        setTimeout(() => location.reload(), 800);
+      } catch (err) {
+        showToast(`Failed: ${err.message}`, true);
+      }
+    }
+
+
+    // ── BQ threshold hover effects ─────────────────────────────────────────────
+
+    document.querySelectorAll('.bq-threshold').forEach(cell => {
+      cell.addEventListener('mouseenter', () => {
+        if (!cell.querySelector('input')) {
+          cell.style.background = '#1e2230'; cell.style.color = '#818cf8'; cell.style.borderColor = '#3a3f5c';
+        }
+      });
+      cell.addEventListener('mouseleave', () => {
+        if (!cell.querySelector('input')) {
+          cell.style.background = '#13151a'; cell.style.color = '#9aa0b4'; cell.style.borderColor = '#2a2d38';
+        }
+      });
     });
 
   </script>
