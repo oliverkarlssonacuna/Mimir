@@ -707,19 +707,28 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             )
             pre_chart = chart_path if not chart_path.startswith("error") else None
 
-            # Single Gemini call — only analysis, no tool calls needed
+            # Single Gemini call — only analysis text, no tool calls
             prompt = (
-                f"Today's date: {today}\n"
-                f"Analyse the metric **{metric_info['metric_label']}** (id: {metric_id}).\n"
+                f"Today's date: {today}\n\n"
+                f"## Context\n"
+                f"This is a game analytics metric from a mobile game. "
+                f"The closed beta ran from {Config.BASELINE_START_DATE} to ~2026-03-30. "
+                f"After the beta closed, most metrics dropped to near-zero — this is expected and normal.\n\n"
+                f"## Metric: {metric_info['metric_label']} (id: {metric_id})\n"
                 f"Direction: {metric_info['direction']}\n"
-                f"Anomalies detected on {reference_date} via: {triggered_comparisons}\n"
+                f"Anomalies detected on {reference_date}: {triggered_comparisons}\n"
                 f"{anomaly_detail}\n\n"
-                f"## Daily data (from {baseline} to {reference_date}):\n"
+                f"## Daily data ({baseline} to {reference_date}):\n"
                 f"{steep_json}\n\n"
                 f"## Jira releases:\n{jira_context}\n\n"
-                "A chart has already been generated and attached.\n\n"
-                f"Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
-                "Consider the Jira releases above. Provide possible causes and a recommendation.\n"
+                "## Instructions\n"
+                "A chart is already attached — do NOT generate a chart or call any functions.\n"
+                "Write a concise analysis (3-5 sentences). Focus on:\n"
+                "1. What the data actually shows (quantify the change)\n"
+                "2. Whether this is expected (e.g. beta closure) or a genuine anomaly\n"
+                "3. If genuine, the most likely specific cause based on the data pattern\n"
+                "Do NOT list generic possible causes. Do NOT say 'investigate further'. "
+                "Be direct and specific.\n"
             )
 
             loop = asyncio.get_running_loop()
