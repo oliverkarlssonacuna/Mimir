@@ -455,7 +455,8 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         return f"{v:.4f}"
 
     # ── Collect all annotation points to avoid overlap ────────────────────
-    _annotations = []  # list of (idx, y, color, line1, line2)
+    _annotations = []  # list of (idx, y, color, label_text)
+    _anomaly_y = None  # track anomaly value for % change on baselines
 
     if anomaly_date and chart_type != "pie":
         search_xs = all_xs if (group_col and group_col in data[0]) else xs
@@ -465,7 +466,8 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 anomaly_idx = idx
                 break
         if anomaly_idx is not None and chart_type == "line" and ys is not None:
-            _annotations.append((anomaly_idx, ys[anomaly_idx], RED, "Anomaly", f"{anomaly_date[5:]}  ·  {_fmt_val(ys[anomaly_idx])}"))
+            _anomaly_y = ys[anomaly_idx]
+            _annotations.append((anomaly_idx, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
 
     def _find_baseline_idx(baseline_dt):
         search_xs_b = all_xs if (group_col and group_col in data[0]) else xs
@@ -493,15 +495,23 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 pass
         return b_idx
 
+    def _pct_change_label(prefix, baseline_val):
+        """Build label like 'WoW ▼ 26.5%  (4.31 → 3.17)' showing change."""
+        if _anomaly_y is None or baseline_val is None or baseline_val == 0:
+            return f"{prefix}  ·  {_fmt_val(baseline_val or 0)}"
+        pct = ((_anomaly_y - baseline_val) / abs(baseline_val)) * 100
+        arrow = "▲" if pct > 0 else "▼"
+        return f"{prefix}  {arrow} {abs(pct):.1f}%  ({_fmt_val(baseline_val)} → {_fmt_val(_anomaly_y)})"
+
     if baseline_date and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date)
         if b_idx is not None:
-            _annotations.append((b_idx, ys[b_idx], YELLOW, "WoW baseline", f"{xs[b_idx][:10][5:]}  ·  {_fmt_val(ys[b_idx])}"))
+            _annotations.append((b_idx, ys[b_idx], YELLOW, _pct_change_label("WoW", ys[b_idx])))
 
     if baseline_date_2 and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date_2)
         if b_idx is not None:
-            _annotations.append((b_idx, ys[b_idx], GREEN, "DoD baseline", f"{xs[b_idx][:10][5:]}  ·  {_fmt_val(ys[b_idx])}"))
+            _annotations.append((b_idx, ys[b_idx], GREEN, _pct_change_label("DoD", ys[b_idx])))
 
     # ── Draw annotations cleanly ─────────────────────────────────────────
     y_min, y_max = ax.get_ylim() if ys else (0, 1)
@@ -509,7 +519,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         y_min, y_max = min(ys), max(ys)
     label_y_top = y_max * 1.08 if y_max > 0 else 1
 
-    for i, (a_idx, a_y, a_color, a_label, a_detail) in enumerate(_annotations):
+    for i, (a_idx, a_y, a_color, a_text) in enumerate(_annotations):
         # Thin vertical line from data point to top label area
         ax.vlines(a_idx, a_y, label_y_top, color=a_color, linewidth=0.8, alpha=0.4, zorder=5)
         # Small clean dot on data point
@@ -517,7 +527,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 markeredgecolor=SURFACE, markeredgewidth=1.5)
         # Label at top — pill style
         ax.annotate(
-            f"{a_label}   {a_detail}",
+            a_text,
             xy=(a_idx, label_y_top),
             xytext=(0, 6 + i * 18), textcoords="offset points",
             fontsize=8, color=a_color, fontweight="500",
