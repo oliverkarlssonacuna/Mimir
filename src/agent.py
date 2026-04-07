@@ -464,6 +464,8 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     # ── Collect all annotation points to avoid overlap ────────────────────
     _annotations = []  # list of (idx, y, color, label_text)
     _anomaly_y = None  # track anomaly value for % change on baselines
+    logger.info("Annotations input: anomaly_date=%r baseline_date=%r baseline_date_2=%r chart_type=%r ys_is_none=%s",
+                anomaly_date, baseline_date, baseline_date_2, chart_type, ys is None)
 
     if anomaly_date and chart_type != "pie":
         search_xs = all_xs if (group_col and group_col in data[0]) else xs
@@ -512,11 +514,13 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
     if baseline_date and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date)
+        logger.info("WoW baseline_date=%s b_idx=%s", baseline_date, b_idx)
         if b_idx is not None:
             _annotations.append((b_idx, ys[b_idx], YELLOW, _pct_change_label("WoW", ys[b_idx])))
 
     if baseline_date_2 and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date_2)
+        logger.info("DoD baseline_date_2=%s b_idx=%s", baseline_date_2, b_idx)
         if b_idx is not None:
             _annotations.append((b_idx, ys[b_idx], GREEN, _pct_change_label("DoD", ys[b_idx])))
 
