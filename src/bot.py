@@ -656,25 +656,55 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             }
             _reset_thread_timer(thread.id)
 
-            # Run deep analysis
+            # Pre-fetch data in parallel to reduce Gemini round-trips
             today = datetime.now().strftime("%Y-%m-%d")
             baseline = Config.BASELINE_START_DATE
+            ref_date_obj = datetime.strptime(reference_date, "%Y-%m-%d").date()
+            days_since_baseline = (ref_date_obj - datetime.strptime(baseline, "%Y-%m-%d").date()).days + 1
+
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            def _fetch_steep():
+                from agent import _query_steep_metric
+                data = _query_steep_metric(steep, metric_id, days=days_since_baseline)
+                # Convert percent metrics
+                if metric_id in percent_metric_ids:
+                    data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} if "value" in p else p for p in data]
+                return data
+
+            def _fetch_jira():
+                try:
+                    releases = jira_client.get_releases_near_date(ref_date_obj, Config.JIRA_PROJECT_KEY)
+                    return jira_client.format_release_context(releases, ref_date_obj) or "No Jira releases found near this date."
+                except Exception as e:
+                    logger.error("Jira lookup failed: %s", e)
+                    return f"Jira lookup failed: {e}"
+
+            with _TPE(max_workers=2) as pre_exec:
+                steep_future = pre_exec.submit(_fetch_steep)
+                jira_future = pre_exec.submit(_fetch_jira)
+                steep_data = steep_future.result()
+                jira_context = jira_future.result()
+
+            import json as _json
+            steep_json = _json.dumps(steep_data)
+
+            # Build prompt with pre-fetched data — Gemini only needs to plot + analyse
             prompt = (
                 f"Today's date: {today}\n"
                 f"Do a detailed analysis of the metric {metric_info['metric_label']} (id: {metric_id}).\n"
                 f"Direction: {metric_info['direction']}\n"
                 f"Anomalies detected on {reference_date} via: {triggered_comparisons}\n"
                 f"{anomaly_detail}\n\n"
+                f"## Pre-fetched daily data (from {baseline} to {reference_date}):\n"
+                f"{steep_json}\n\n"
+                f"## Jira releases:\n{jira_context}\n\n"
                 "Steps:\n"
-                f"1. Fetch daily data FROM {baseline} (beta launch) to {reference_date} with query_steep_metric. "
-                f"Do NOT use data before {baseline}. Do NOT include data after {reference_date}.\n"
-                f"2. Draw a line chart with plot_results. Use anomaly_date=\"{reference_date}\" to mark the anomaly. "
+                f"1. Draw a line chart with plot_results using the data above. Use anomaly_date=\"{reference_date}\" to mark the anomaly. "
                 + (f"Use baseline_date=\"{baseline_date}\" to mark the WoW/Pace baseline (yellow). " if baseline_date else "")
                 + (f"Use baseline_date_2=\"{baseline_date_2}\" to mark the DoD baseline (green)." if baseline_date_2 else "")
                 + "\n"
-                "3. Check for relevant Jira releases with get_jira_releases\n"
-                f"4. Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
-                "Provide possible causes and a recommendation.\n"
+                f"2. Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
+                "Consider the Jira releases above. Provide possible causes and a recommendation.\n"
             )
 
             loop = asyncio.get_running_loop()
