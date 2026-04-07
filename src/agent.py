@@ -563,7 +563,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     fig.tight_layout(pad=2.5)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="mimir_chart_")
-    fig.savefig(tmp.name, dpi=180, facecolor=fig.get_facecolor(), bbox_inches="tight")
+    fig.savefig(tmp.name, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
     plt.close(fig)
     logger.info("Chart saved to %s", tmp.name)
     return tmp.name

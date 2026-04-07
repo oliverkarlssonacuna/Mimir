@@ -688,17 +688,22 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             import json as _json
             steep_json = _json.dumps(steep_data)
 
-            # Pre-render chart — no need for Gemini to call plot_results
+            # Pre-render chart in thread executor — savefig blocks event loop if run inline
             from agent import _plot_results
-            chart_path = _plot_results(
-                data_json=steep_json,
-                chart_type="line",
-                x_col="date",
-                y_col="value",
-                title=metric_info["metric_label"],
-                anomaly_date=reference_date,
-                baseline_date=baseline_date or "",
-                baseline_date_2=baseline_date_2 or "",
+            import asyncio as _asyncio, functools as _functools
+            chart_path = await _asyncio.get_event_loop().run_in_executor(
+                None,
+                _functools.partial(
+                    _plot_results,
+                    data_json=steep_json,
+                    chart_type="line",
+                    x_col="date",
+                    y_col="value",
+                    title=metric_info["metric_label"],
+                    anomaly_date=reference_date,
+                    baseline_date=baseline_date or "",
+                    baseline_date_2=baseline_date_2 or "",
+                )
             )
             pre_chart = chart_path if not chart_path.startswith("error") else None
 
