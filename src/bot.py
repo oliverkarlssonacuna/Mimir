@@ -455,7 +455,7 @@ async def on_message(message: discord.Message):
 
         prompt = (
             f"Today's date: {today}\n"
-            f"Metric: {metric_info["metric_label"]} (id: {metric_info['metric_id']})\n"
+            f"Metric: {metric_info['metric_label']} (id: {metric_info['metric_id']})\n"
             f"Direction: {metric_info['direction']}\n"
         )
         if metric_info.get("anomaly_desc"):
