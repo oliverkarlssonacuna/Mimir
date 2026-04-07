@@ -554,6 +554,118 @@ async def bulk_update_threshold(request: Request):
 
     return {"ok": True, "updated": updated}
 
+@app.post("/api/metrics/bulk-toggle")
+
+async def bulk_toggle_metrics(request: Request):
+
+    user = _user(request)
+
+    if not user:
+
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+
+    metric_ids = body.get("metric_ids", [])
+
+    enabled = body.get("enabled")
+
+    if not metric_ids or not isinstance(metric_ids, list):
+
+        raise HTTPException(status_code=400, detail="metric_ids must be a non-empty list")
+
+    if enabled is None or not isinstance(enabled, bool):
+
+        raise HTTPException(status_code=400, detail="enabled must be a boolean")
+
+    from google.cloud import bigquery as _bq
+
+    placeholders = ", ".join(f"@id_{i}" for i in range(len(metric_ids)))
+
+    sql = (
+
+        f"UPDATE `{Config.BQ_METRIC_CONFIGS_TABLE}` "
+
+        f"SET enabled = @enabled, updated_at = CURRENT_TIMESTAMP() "
+
+        f"WHERE metric_id IN ({placeholders})"
+
+    )
+
+    params = [_bq.ScalarQueryParameter("enabled", "BOOL", enabled)]
+
+    params += [
+
+        _bq.ScalarQueryParameter(f"id_{i}", "STRING", mid)
+
+        for i, mid in enumerate(metric_ids)
+
+    ]
+
+    bq.run_update(sql, params)
+
+    logger.info("[admin] %s bulk-toggled %d metrics -> enabled=%s", user["email"], len(metric_ids), enabled)
+
+    await _signal_bot_reload()
+
+    return {"ok": True}
+
+@app.post("/api/bq-monitors/bulk-toggle")
+
+async def bulk_toggle_bq_monitors(request: Request):
+
+    user = _user(request)
+
+    if not user:
+
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+
+    metric_ids = body.get("metric_ids", [])
+
+    enabled = body.get("enabled")
+
+    if not metric_ids or not isinstance(metric_ids, list):
+
+        raise HTTPException(status_code=400, detail="metric_ids must be a non-empty list")
+
+    if enabled is None or not isinstance(enabled, bool):
+
+        raise HTTPException(status_code=400, detail="enabled must be a boolean")
+
+    from google.cloud import bigquery as _bq
+
+    placeholders = ", ".join(f"@id_{i}" for i in range(len(metric_ids)))
+
+    sql = (
+
+        f"UPDATE `{Config.BQ_MONITOR_TABLE}` "
+
+        f"SET enabled = @enabled, updated_at = CURRENT_TIMESTAMP() "
+
+        f"WHERE metric_id IN ({placeholders})"
+
+    )
+
+    params = [_bq.ScalarQueryParameter("enabled", "BOOL", enabled)]
+
+    params += [
+
+        _bq.ScalarQueryParameter(f"id_{i}", "STRING", mid)
+
+        for i, mid in enumerate(metric_ids)
+
+    ]
+
+    bq.run_update(sql, params)
+
+    logger.info("[admin] %s bulk-toggled %d BQ monitors -> enabled=%s", user["email"], len(metric_ids), enabled)
+
+    await _signal_bot_reload()
+
+    return {"ok": True}
+
 @app.post("/api/metrics/add")
 
 async def add_steep_metric(request: Request):

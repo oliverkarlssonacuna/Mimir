@@ -469,10 +469,32 @@
 
     <!-- BQ Metrics table card -->
     <div class="rounded-xl border overflow-hidden shadow-xl" style="background:#1c1f27; border-color:#2a2d38;">
+
+      <!-- Toolbar -->
+      <div class="px-6 py-4 border-b flex flex-wrap items-center gap-3" style="border-color:#2a2d38;">
+        <p class="text-xs flex items-center gap-1.5 font-medium" style="color:#f59e0b;" id="bq-bulk-hint">
+          <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 100 20A10 10 0 0012 2z"/>
+          </svg>
+          Tick rows to bulk enable/disable
+        </p>
+        <span class="flex-1"></span>
+        <p class="text-sm" style="color:#4f5668;" id="bq-row-count"></p>
+      </div>
+
       <div class="overflow-x-auto">
         <table class="w-full text-sm" id="bq-table">
           <thead>
             <tr class="border-b" style="border-color:#2a2d38; background:#171a21;">
+              <th class="pl-5 pr-2 py-3">
+                <label class="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" id="bq-select-all-cb"
+                         class="w-4 h-4 rounded cursor-pointer accent-indigo-500"
+                         onclick="toggleBqSelectAll(this)"
+                         title="Select all">
+                  <span class="text-xs font-semibold uppercase tracking-wide whitespace-nowrap" style="color:#4f5668;">Select all</span>
+                </label>
+              </th>
               <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Metric</th>
               <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Direction</th>
               <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Pace %</th>
@@ -486,6 +508,13 @@
             {% for m in bq_monitors %}
             <tr class="group border-b transition-colors" style="border-color:#1e2028;"
                 onmouseover="this.style.background='#20232c'" onmouseout="this.style.background=''">
+
+              <!-- Row checkbox -->
+              <td class="pl-5 pr-2 py-4 w-8">
+                <input type="checkbox" class="bq-row-cb w-4 h-4 rounded cursor-pointer accent-indigo-500"
+                       data-metric="{{ m.metric_id }}"
+                       onclick="onBqRowCheck()">
+              </td>
 
               <!-- Metric name -->
               <td class="px-6 py-4">
@@ -737,6 +766,19 @@
       </div>
 
       <div class="flex items-center gap-3 ml-auto">
+        <button onclick="bulkToggle(true)"
+                class="text-sm px-3 py-1.5 rounded-lg border transition-colors font-medium"
+                style="color:#34d399; border-color:#064e3b; background:#022c22;"
+                onmouseover="this.style.background='#064e3b'" onmouseout="this.style.background='#022c22'">
+          Enable
+        </button>
+        <button onclick="bulkToggle(false)"
+                class="text-sm px-3 py-1.5 rounded-lg border transition-colors font-medium"
+                style="color:#f87171; border-color:#450a0a; background:#1c0a0a;"
+                onmouseover="this.style.background='#2d1d20'" onmouseout="this.style.background='#1c0a0a'">
+          Disable
+        </button>
+        <div class="w-px h-6" style="background:#2a2d38;"></div>
         <button onclick="clearSelection()"
                 class="text-sm px-3 py-1.5 rounded-lg border transition-colors"
                 style="color:#6b7385; border-color:#2a2d38;"
@@ -747,6 +789,37 @@
                 class="text-sm font-medium px-4 py-1.5 rounded-lg transition-colors"
                 style="background:#4f46e5; color:#fff;">
           Apply to <span id="bulk-count">0</span> metrics
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── BQ Bulk bar (shown when BQ rows are selected) ───────────────────── -->
+  <div id="bq-bulk-bar"
+       class="hidden fixed bottom-0 left-0 right-0 z-40 border-t px-6 py-4"
+       style="background:#1c1f27; border-color:#3a3f4d; box-shadow:0 -4px 24px rgba(0,0,0,0.5);">
+    <div class="max-w-screen-xl mx-auto flex flex-wrap items-center gap-4">
+      <span id="bq-bulk-label" class="text-sm font-medium" style="color:#9aa0b4;">0 selected</span>
+
+      <div class="flex items-center gap-3 ml-auto">
+        <button onclick="bqBulkToggle(true)"
+                class="text-sm px-3 py-1.5 rounded-lg border transition-colors font-medium"
+                style="color:#34d399; border-color:#064e3b; background:#022c22;"
+                onmouseover="this.style.background='#064e3b'" onmouseout="this.style.background='#022c22'">
+          Enable
+        </button>
+        <button onclick="bqBulkToggle(false)"
+                class="text-sm px-3 py-1.5 rounded-lg border transition-colors font-medium"
+                style="color:#f87171; border-color:#450a0a; background:#1c0a0a;"
+                onmouseover="this.style.background='#2d1d20'" onmouseout="this.style.background='#1c0a0a'">
+          Disable
+        </button>
+        <div class="w-px h-6" style="background:#2a2d38;"></div>
+        <button onclick="clearBqSelection()"
+                class="text-sm px-3 py-1.5 rounded-lg border transition-colors"
+                style="color:#6b7385; border-color:#2a2d38;"
+                onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#6b7385'">
+          Cancel
         </button>
       </div>
     </div>
@@ -1849,6 +1922,111 @@
         setTimeout(() => location.reload(), 800);
       } catch (err) {
         showToast(`Failed: ${err.message}`, true);
+      }
+    }
+
+
+    // ── Steep bulk enable/disable ─────────────────────────────────────────────
+
+    async function bulkToggle(enabled) {
+      const metricIds = Array.from(document.querySelectorAll('.row-cb:checked')).map(cb => cb.dataset.metric);
+      if (!metricIds.length) return;
+
+      try {
+        const resp = await fetch('/api/metrics/bulk-toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metric_ids: metricIds, enabled }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        // Update UI
+        for (const mid of metricIds) {
+          const track = document.getElementById(`toggle-track-${mid}`);
+          const thumb = document.getElementById(`toggle-thumb-${mid}`);
+          const cb = document.querySelector(`.row-cb[data-metric="${mid}"]`);
+          const toggle = cb?.closest('tr')?.querySelector('input[type="checkbox"][data-metric]');
+          if (track) track.style.background = enabled ? '#4f46e5' : '#2a2d38';
+          if (thumb) thumb.style.left = enabled ? '22px' : '2px';
+          if (toggle && toggle !== cb) toggle.checked = enabled;
+          if (cb) cb.closest('tr').dataset.enabled = enabled ? 'active' : 'inactive';
+        }
+        showToast(`${enabled ? 'Enabled' : 'Disabled'} ${metricIds.length} metrics`);
+        showChangeBanner();
+        clearSelection();
+      } catch (err) {
+        showToast(`Error: ${err.message}`, true);
+      }
+    }
+
+
+    // ── BQ bulk selection ──────────────────────────────────────────────────────
+
+    function _bqVisibleCheckboxes() {
+      return Array.from(document.querySelectorAll('#bq-table-body tr:not(.hidden) .bq-row-cb'));
+    }
+
+    function onBqRowCheck() {
+      const all = _bqVisibleCheckboxes();
+      const checked = all.filter(cb => cb.checked);
+      const master = document.getElementById('bq-select-all-cb');
+      master.indeterminate = checked.length > 0 && checked.length < all.length;
+      master.checked = checked.length === all.length && all.length > 0;
+      _updateBqBulkBar(checked.length);
+    }
+
+    function toggleBqSelectAll(masterCb) {
+      _bqVisibleCheckboxes().forEach(cb => cb.checked = masterCb.checked);
+      _updateBqBulkBar(masterCb.checked ? _bqVisibleCheckboxes().length : 0);
+    }
+
+    function clearBqSelection() {
+      document.querySelectorAll('.bq-row-cb').forEach(cb => cb.checked = false);
+      const master = document.getElementById('bq-select-all-cb');
+      master.checked = false;
+      master.indeterminate = false;
+      _updateBqBulkBar(0);
+    }
+
+    function _updateBqBulkBar(count) {
+      const bar = document.getElementById('bq-bulk-bar');
+      const hint = document.getElementById('bq-bulk-hint');
+      document.getElementById('bq-bulk-label').textContent = `${count} selected`;
+      bar.classList.toggle('hidden', count === 0);
+      if (hint) hint.classList.toggle('hidden', count > 0);
+    }
+
+    async function bqBulkToggle(enabled) {
+      const metricIds = Array.from(document.querySelectorAll('.bq-row-cb:checked')).map(cb => cb.dataset.metric);
+      if (!metricIds.length) return;
+
+      try {
+        const resp = await fetch('/api/bq-monitors/bulk-toggle', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ metric_ids: metricIds, enabled }),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+        // Update UI
+        for (const mid of metricIds) {
+          const track = document.getElementById(`bq-toggle-track-${mid}`);
+          const thumb = document.getElementById(`bq-toggle-thumb-${mid}`);
+          const row = document.querySelector(`.bq-row-cb[data-metric="${mid}"]`)?.closest('tr');
+          const toggle = row?.querySelector('input[type="checkbox"][data-metric]');
+          if (track) track.style.background = enabled ? '#4f46e5' : '#2a2d38';
+          if (thumb) thumb.style.left = enabled ? '22px' : '2px';
+          if (toggle) toggle.checked = enabled;
+        }
+        showToast(`${enabled ? 'Enabled' : 'Disabled'} ${metricIds.length} BQ metrics`);
+        showChangeBanner();
+        clearBqSelection();
+      } catch (err) {
+        showToast(`Error: ${err.message}`, true);
       }
     }
 
