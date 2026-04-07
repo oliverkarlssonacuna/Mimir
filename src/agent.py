@@ -324,14 +324,14 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     highlighted = {v.strip() for v in highlight_values.split(",") if v.strip()} if highlight_values else set()
 
     # ── Mimir color palette (matches admin page) ──────────────────────────
-    BG = "#13151a"
-    SURFACE = "#1c1f27"
+    BG = "#0b0d11"
+    SURFACE = "#12141a"
     BORDER = "#2a2d38"
-    GRID = "#2a2d38"
-    TEXT = "#e2e8f0"
-    TEXT_MUTED = "#9aa0b4"
-    TEXT_DIM = "#4f5668"
-    ACCENT = "#818cf8"       # indigo-400 — primary line
+    GRID = "#1e2028"
+    TEXT = "#f1f5f9"
+    TEXT_MUTED = "#cbd5e1"
+    TEXT_DIM = "#cbd5e1"
+    ACCENT = "#6366f1"       # indigo-500 — primary line
     RED = "#f87171"          # red-400 — anomaly
     YELLOW = "#fbbf24"       # amber-400 — WoW baseline
     GREEN = "#34d399"        # emerald-400 — DoD baseline
@@ -431,10 +431,10 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
         elif chart_type == "line":
             # Main line
-            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.2, zorder=3, solid_capstyle="round")
+            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.5, zorder=3, solid_capstyle="round")
             # Gradient fill
             import numpy as np
-            ax.fill_between(x_indices, ys, alpha=0.10, color=ACCENT, zorder=2)
+            ax.fill_between(x_indices, ys, alpha=0.20, color=ACCENT, zorder=2)
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
