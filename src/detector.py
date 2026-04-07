@@ -118,7 +118,7 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             steep_futures = [executor.submit(_process_one, m) for m in self._metric_configs]
             bq_future = executor.submit(self.check_bq_metrics)
 
@@ -524,7 +524,7 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=16) as executor:
+        with ThreadPoolExecutor(max_workers=8) as executor:
             futures = [executor.submit(_process_one, m) for m in configs]
             for future in as_completed(futures):
                 try:
