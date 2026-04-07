@@ -682,6 +682,17 @@ def _ensure_bq_metrics_table():
 
 _ensure_bq_metrics_table()
 
+@app.get("/api/bq-monitors/catalog", include_in_schema=False)
+async def bq_monitor_catalog(request: Request):
+    """Return catalog entries not yet added as BQ monitors."""
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    from bq_catalog import get_catalog_excluding
+    sql = f"SELECT catalog_id FROM `{Config.BQ_METRICS_CONFIGS_TABLE}` WHERE catalog_id IS NOT NULL"
+    existing = {row["catalog_id"] for row in bq.run_query(sql)}
+    return get_catalog_excluding(existing)
+
+
 @app.get("/api/bq-monitors", include_in_schema=False)
 
 async def list_bq_monitors(request: Request):
@@ -722,6 +733,10 @@ async def add_bq_monitor(request: Request):
 
         raise HTTPException(status_code=400, detail="direction must be alert_on_rise or alert_on_drop")
 
+    sql_query = (body.get("sql_query") or "").strip()
+
+    catalog_id = (body.get("catalog_id") or "").strip() or None
+
     import uuid
 
     metric_id = str(uuid.uuid4())[:8]
@@ -734,11 +749,11 @@ async def add_bq_monitor(request: Request):
 
         "(metric_id, metric_label, direction, display_format, "
 
-        "pace_threshold, dod_threshold, wow_threshold, enabled, updated_at) "
+        "pace_threshold, dod_threshold, wow_threshold, enabled, updated_at, sql_query, catalog_id) "
 
         "VALUES (@metric_id, @label, @direction, @display_format, "
 
-        "0.25, 0.20, 0.15, TRUE, CURRENT_TIMESTAMP())"
+        "0.25, 0.20, 0.15, TRUE, CURRENT_TIMESTAMP(), @sql_query, @catalog_id)"
 
     )
 
@@ -751,6 +766,10 @@ async def add_bq_monitor(request: Request):
         _bq.ScalarQueryParameter("direction", "STRING", direction),
 
         _bq.ScalarQueryParameter("display_format", "STRING", display_format),
+
+        _bq.ScalarQueryParameter("sql_query", "STRING", sql_query or None),
+
+        _bq.ScalarQueryParameter("catalog_id", "STRING", catalog_id),
 
     ]
 

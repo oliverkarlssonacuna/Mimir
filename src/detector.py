@@ -41,6 +41,20 @@ class Detector:
         """Load metric configs from BQ into memory cache."""
         self._metric_configs = self.bq.load_metric_configs(Config.BQ_METRIC_CONFIGS_TABLE)
         logger.info("Loaded %d metric configs from BQ.", len(self._metric_configs))
+        self._bq_metric_configs = self._load_bq_metric_configs()
+        logger.info("Loaded %d BQ metric configs.", len(self._bq_metric_configs))
+
+    def _load_bq_metric_configs(self) -> list[dict]:
+        """Load enabled BQ metric configs (those with a sql_query)."""
+        try:
+            sql = (
+                f"SELECT * FROM `{Config.BQ_METRICS_CONFIGS_TABLE}` "
+                "WHERE enabled = TRUE AND sql_query IS NOT NULL AND sql_query != ''"
+            )
+            return self.bq.run_query(sql)
+        except Exception as e:
+            logger.warning("Could not load BQ metric configs: %s", e)
+            return []
 
     # ── Main entry point ──────────────────────────────────────────────────    
 
@@ -111,6 +125,13 @@ class Detector:
                     anomalies.extend(future.result())
                 except Exception as e:
                     logger.error("Unhandled error in metric worker: %s", e)
+
+        # Also check BQ-sourced metrics
+        try:
+            bq_anomalies = self.check_bq_metrics()
+            anomalies.extend(bq_anomalies)
+        except Exception as e:
+            logger.error("BQ metric check failed: %s", e)
 
         return anomalies
 
@@ -402,3 +423,113 @@ class Detector:
             baseline_date=baseline_date,
             display_format=display_format,
         )
+
+    # ── BQ metric checking ────────────────────────────────────────────────
+
+    def check_bq_metrics(self, progress_callback=None) -> list["Anomaly"]:
+        """Fetch and check all enabled BQ metrics. Returns anomalies."""
+        configs = getattr(self, "_bq_metric_configs", [])
+        if not configs:
+            return []
+
+        anomalies: list[Anomaly] = []
+        total = len(configs)
+        _lock = threading.Lock()
+        _counter = [0]
+
+        def _process_one(metric: dict) -> list[Anomaly]:
+            metric_id = metric["metric_id"]
+            label = metric["metric_label"]
+            direction = metric.get("direction", "alert_on_drop")
+            display_format = metric.get("display_format") or "number"
+            sql_query = metric.get("sql_query", "")
+            result: list[Anomaly] = []
+
+            try:
+                rows = self.bq.run_query(sql_query)
+            except Exception as e:
+                logger.error("BQ metric query failed for %s: %s", label, e)
+                with _lock:
+                    _counter[0] += 1
+                    if progress_callback:
+                        progress_callback(_counter[0], total, label)
+                return result
+
+            # Build date → value dict from query results
+            historical: dict[str, float] = {}
+            for row in rows:
+                date_val = row.get("date")
+                value = row.get("value")
+                if date_val is not None and value is not None:
+                    date_str = date_val if isinstance(date_val, str) else str(date_val)
+                    historical[date_str] = float(value)
+
+            if not historical:
+                logger.warning("No data returned for BQ metric %s", label)
+                with _lock:
+                    _counter[0] += 1
+                    if progress_callback:
+                        progress_callback(_counter[0], total, label)
+                return result
+
+            metric_thresholds = {
+                comp: float(metric.get(f"{comp}_threshold", THRESHOLDS[comp]))
+                for comp in ("pace", "dod", "wow")
+            }
+
+            from datetime import timezone, timedelta
+            now = datetime.now(timezone.utc)
+            today_str = now.strftime("%Y-%m-%d")
+
+            # BQ metrics have no intraday snapshots — skip pace, run DoD + WoW only
+            today = datetime.strptime(today_str, "%Y-%m-%d").date()
+            yesterday = today - timedelta(days=1)
+            day_before = today - timedelta(days=2)
+            same_weekday_last_week = today - timedelta(days=7)
+            baseline_start = datetime.strptime(Config.BASELINE_START_DATE, "%Y-%m-%d").date()
+
+            yesterday_val = historical.get(yesterday.isoformat())
+            day_before_val = historical.get(day_before.isoformat())
+            last_week_val = historical.get(same_weekday_last_week.isoformat())
+
+            if yesterday_val is not None and day_before_val is not None and day_before_val != 0:
+                anomaly = self._evaluate(
+                    metric_id, label, direction, "dod",
+                    yesterday_val, day_before_val,
+                    metric_thresholds["dod"],
+                    reference_date=yesterday.isoformat(),
+                    display_format=display_format,
+                    baseline_date=day_before.isoformat(),
+                )
+                if anomaly:
+                    result.append(anomaly)
+
+            if (same_weekday_last_week > baseline_start
+                    and yesterday_val is not None and last_week_val is not None and last_week_val != 0):
+                anomaly = self._evaluate(
+                    metric_id, label, direction, "wow",
+                    yesterday_val, last_week_val,
+                    metric_thresholds["wow"],
+                    reference_date=yesterday.isoformat(),
+                    display_format=display_format,
+                    baseline_date=same_weekday_last_week.isoformat(),
+                )
+                if anomaly:
+                    result.append(anomaly)
+
+            with _lock:
+                _counter[0] += 1
+                if progress_callback:
+                    progress_callback(_counter[0], total, label)
+
+            return result
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(_process_one, m) for m in configs]
+            for future in as_completed(futures):
+                try:
+                    anomalies.extend(future.result())
+                except Exception as e:
+                    logger.error("Unhandled error in BQ metric worker: %s", e)
+
+        return anomalies
