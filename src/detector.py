@@ -212,6 +212,67 @@ class Detector:
             mid = r["metric_id"]
             historical.setdefault(mid, {})[str(r["snapshot_date"])] = r["value"]
 
+        # ── Fallback: metrics missing today's snapshot ───────────────────────
+        missing_ids = [m["metric_id"] for m in self._metric_configs if m["metric_id"] not in today_values]
+        if missing_ids:
+            # Find latest snapshot date per missing metric
+            missing_list = ", ".join(f"'{mid}'" for mid in missing_ids)
+            sql_latest = (
+                f"SELECT metric_id, MAX(snapshot_date) as latest_date "
+                f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+                f"WHERE metric_id IN ({missing_list}) "
+                f"GROUP BY metric_id"
+            )
+            try:
+                latest_rows = self.bq.run_query(sql_latest)
+                latest_dates = {r["metric_id"]: r["latest_date"] for r in latest_rows}
+            except Exception as e:
+                logger.warning("check_only fallback query failed: %s", e)
+                latest_dates = {}
+
+            stale_threshold_hours = 5
+            for mid in missing_ids:
+                latest = latest_dates.get(mid)
+                # Calculate hours since latest snapshot
+                if latest is not None:
+                    latest_dt = datetime.combine(latest, datetime.min.time()).replace(tzinfo=timezone.utc)
+                    hours_old = (now - latest_dt).total_seconds() / 3600
+                else:
+                    hours_old = 999  # no snapshot ever → always fetch
+
+                if hours_old > stale_threshold_hours:
+                    # Steep hasn't updated in >5h — fetch directly
+                    label = next((m["metric_label"] for m in self._metric_configs if m["metric_id"] == mid), mid)
+                    logger.info("%s: no snapshot for %dh, falling back to Steep API.", label, int(hours_old))
+                    try:
+                        value, refreshed_at, hist = self._fetch_values(mid)
+                        if value is not None:
+                            today_values[mid] = value
+                            # Merge fetched history into our historical dict
+                            for date_str, v in hist.items():
+                                if date_str != today_str:
+                                    historical.setdefault(mid, {})[date_str] = v
+                            # Save snapshot so we don't fetch again next hour
+                            if not self._already_captured(mid, today_str, value):
+                                self._save_snapshot(mid, label, today_str, current_hour, value, refreshed_at)
+                    except Exception as e:
+                        logger.warning("%s: Steep fallback failed: %s", label, e)
+                else:
+                    # Latest snapshot is fresh enough — use it
+                    label = next((m["metric_label"] for m in self._metric_configs if m["metric_id"] == mid), mid)
+                    logger.info("%s: using latest BQ snapshot from %s (%.1fh old).", label, latest, hours_old)
+                    sql_use_latest = (
+                        f"SELECT cumulative_value FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+                        f"WHERE metric_id = '{mid}' AND snapshot_date = '{latest}' "
+                        f"ORDER BY snapshot_hour DESC LIMIT 1"
+                    )
+                    try:
+                        rows = self.bq.run_query(sql_use_latest)
+                        if rows:
+                            today_values[mid] = rows[0]["cumulative_value"]
+                    except Exception as e:
+                        logger.warning("%s: latest snapshot fetch failed: %s", label, e)
+
         anomalies: list[Anomaly] = []
         total = len(self._metric_configs)
 
