@@ -714,12 +714,22 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
             def _fetch_steep():
+                import time as _time
                 from agent import _query_steep_metric
-                data = _query_steep_metric(steep, metric_id, days=days_since_baseline)
-                # Convert percent metrics
-                if metric_id in percent_metric_ids:
-                    data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} if "value" in p else p for p in data]
-                return data
+                last_exc = None
+                for attempt in range(3):
+                    try:
+                        data = _query_steep_metric(steep, metric_id, days=days_since_baseline)
+                        if metric_id in percent_metric_ids:
+                            data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} if "value" in p else p for p in data]
+                        return data
+                    except Exception as e:
+                        last_exc = e
+                        logger.warning("Steep fetch attempt %d failed: %s", attempt + 1, e)
+                        if attempt < 2:
+                            _time.sleep(2 ** attempt)  # 1s, 2s backoff
+                logger.error("Steep fetch failed after 3 attempts: %s", last_exc)
+                return []
 
             def _fetch_jira():
                 try:
@@ -875,7 +885,9 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             )
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(None, lambda: agent.ask(prompt, tools_enabled=False))
+            from concurrent.futures import ThreadPoolExecutor as _TPE2
+            with _TPE2(max_workers=1) as gemini_exec:
+                response = await loop.run_in_executor(gemini_exec, lambda: agent.ask(prompt, tools_enabled=False))
 
             text = response.text or "Here is the analysis:"
             # Use pre-rendered chart, fall back to agent chart if pre-render failed
