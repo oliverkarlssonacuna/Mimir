@@ -1,8 +1,7 @@
-"""
-Discord bot – Steep metric anomaly monitoring.
+"""Discord bot – Steep metric anomaly monitoring.
 
-Polls Steep every 4 hours, saves snapshots to BQ,
-detects anomalies, and sends alerts to Discord.
+Monitor loop runs every hour using BQ snapshots (no Steep API calls).
+Steep API is used only for /status manual checks and deep analysis threads.
 
 Commands:
   /status   – run a manual check and show all metrics
@@ -347,7 +346,7 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
 
 @tasks.loop(seconds=Config.MONITOR_INTERVAL_SECONDS)
 async def monitor_loop():
-    """Background task – polls Steep, saves snapshots, checks for anomalies."""
+    """Background task – checks BQ snapshots for anomalies every hour."""
     alert_channel_id = Config.DISCORD_ALERT_CHANNEL_ID
     if not alert_channel_id:
         logger.warning("DISCORD_ALERT_CHANNEL_ID not set – skipping monitor.")
@@ -379,7 +378,7 @@ async def monitor_loop():
 
     try:
         anomalies = await loop.run_in_executor(
-            None, lambda: detector.collect_and_check(progress_callback=on_progress)
+            None, lambda: detector.check_only(progress_callback=on_progress)
         )
     except Exception as e:
         logger.error("Monitor check failed: %s", e)

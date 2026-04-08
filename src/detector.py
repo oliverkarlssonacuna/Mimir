@@ -144,6 +144,96 @@ class Detector:
 
         return anomalies
 
+    def check_only(self, progress_callback=None) -> list[Anomaly]:
+        """Run anomaly checks using only BQ snapshot data — no Steep API calls.
+
+        Used by the monitor loop; snapshot collection is handled by the snapshot job.
+        """
+        now = datetime.now(timezone.utc)
+        current_hour = now.hour
+        today_str = now.strftime("%Y-%m-%d")
+
+        anomalies: list[Anomaly] = []
+        total = len(self._metric_configs)
+        _lock = threading.Lock()
+        _counter = [0]
+
+        def _check_one(metric: dict) -> list[Anomaly]:
+            metric_id = metric["metric_id"]
+            label = metric["metric_label"]
+            direction = metric.get("direction", "down_is_bad")
+            display_format = metric.get("display_format") or "number"
+            result: list[Anomaly] = []
+
+            try:
+                # Get today's current value from BQ snapshot
+                current_value = self._get_nearest_snapshot(metric_id, today_str, current_hour)
+                if current_value is None:
+                    logger.info("%s: no BQ snapshot for today, skipping.", label)
+                    return result
+
+                # Build historical dict from BQ snapshots (last 9 days final values)
+                historical = self._get_historical_from_bq(metric_id, today_str)
+
+                metric_thresholds = {
+                    comp: float(metric.get(f"{comp}_threshold", THRESHOLDS[comp]))
+                    for comp in ("pace", "dod", "wow")
+                }
+                result.extend(
+                    self._check_metric(
+                        metric_id, label, direction, today_str, current_hour,
+                        current_value, metric_thresholds, historical, display_format,
+                    )
+                )
+            except Exception as e:
+                logger.error("check_only failed for %s: %s", label, e)
+            finally:
+                with _lock:
+                    _counter[0] += 1
+                    if progress_callback:
+                        progress_callback(_counter[0], total, label)
+
+            return result
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            steep_futures = [executor.submit(_check_one, m) for m in self._metric_configs]
+            bq_future = executor.submit(self.check_bq_metrics)
+
+            for future in as_completed(steep_futures):
+                try:
+                    anomalies.extend(future.result())
+                except Exception as e:
+                    logger.error("Unhandled error in check_only worker: %s", e)
+
+            try:
+                anomalies.extend(bq_future.result())
+            except Exception as e:
+                logger.error("BQ metric check failed: %s", e)
+
+        return anomalies
+
+    def _get_historical_from_bq(self, metric_id: str, today_str: str) -> dict[str, float]:
+        """Fetch last 9 days of final daily values from BQ snapshots."""
+        from datetime import timedelta
+        from google.cloud import bigquery as _bq
+        today = datetime.strptime(today_str, "%Y-%m-%d").date()
+        from_date = (today - timedelta(days=9)).isoformat()
+        sql = (
+            f"SELECT snapshot_date, MAX(cumulative_value) as value "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            "WHERE metric_id = @metric_id "
+            "AND snapshot_date >= @from_date "
+            "AND snapshot_date < @today "
+            "GROUP BY snapshot_date"
+        )
+        params = [
+            _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+            _bq.ScalarQueryParameter("from_date", "DATE", from_date),
+            _bq.ScalarQueryParameter("today", "DATE", today_str),
+        ]
+        rows = self.bq.run_query(sql, params=params)
+        return {str(r["snapshot_date"]): r["value"] for r in rows}
+
     # ── Fetch from Steep ──────────────────────────────────────────────────
 
     def _fetch_values(self, metric_id: str) -> tuple[float | None, str, dict[str, float]]:

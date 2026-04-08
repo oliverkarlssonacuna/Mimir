@@ -43,7 +43,7 @@ class Config:
     MAX_QUERY_ROWS: int = 200
 
     # Monitor interval – 4 hours (matches Steep cache TTL)
-    MONITOR_INTERVAL_SECONDS: int = int(_optional("MONITOR_INTERVAL_SECONDS", "14400"))
+    MONITOR_INTERVAL_SECONDS: int = int(_optional("MONITOR_INTERVAL_SECONDS", "3600"))
 
     # Jira integration for release context
     JIRA_BASE_URL: str = _optional("JIRA_BASE_URL", "")
