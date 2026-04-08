@@ -462,9 +462,11 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         return f"{sa} → {sb}"
 
     # ── Collect all annotation points to avoid overlap ────────────────────
-    _annotations = []  # list of (idx, y, color, label_text)
-    _anomaly_y = None   # WoW/DoD current value
-    _pace_y = None      # Pace current value
+    _annotations = []  # list of (idx, line_y, label_y, color, label_text)
+    # line_y = position on Steep line (dot sits here)
+    # label_y = BQ ground-truth value (shown in label/pill/% calc)
+    _anomaly_y = None   # WoW/DoD current value (BQ)
+    _pace_y = None      # Pace current value (BQ)
 
     # anomaly_date = WoW/DoD current (yesterday) - RED
     if anomaly_date and chart_type != "pie":
@@ -475,8 +477,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 anomaly_idx = idx
                 break
         if anomaly_idx is not None and chart_type == "line" and ys is not None:
-            _anomaly_y = anomaly_value if anomaly_value is not None else ys[anomaly_idx]
-            _annotations.append((anomaly_idx, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
+            _anomaly_line_y = ys[anomaly_idx]
+            _anomaly_y = anomaly_value if anomaly_value is not None else _anomaly_line_y
+            _annotations.append((anomaly_idx, _anomaly_line_y, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
 
     # pace_date = Pace current (today) - ORANGE
     ORANGE = "#fb923c"  # orange-400
@@ -488,8 +491,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 _pace_idx = idx
                 break
         if _pace_idx is not None:
-            _pace_y = pace_value if pace_value is not None else ys[_pace_idx]
-            _annotations.append((_pace_idx, _pace_y, ORANGE, f"Pace (today)  ·  {_fmt_val(_pace_y)}"))
+            _pace_line_y = ys[_pace_idx]
+            _pace_y = pace_value if pace_value is not None else _pace_line_y
+            _annotations.append((_pace_idx, _pace_line_y, _pace_y, ORANGE, f"Pace (today)  ·  {_fmt_val(_pace_y)}"))
 
     def _find_baseline_idx(baseline_dt):
         search_xs_b = all_xs if (group_col and group_col in data[0]) else xs
@@ -532,8 +536,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         b_idx = _find_baseline_idx(baseline_date)
         if b_idx is not None:
             _wow_baseline_idx = b_idx
-            _wow_baseline_y = baseline_value if baseline_value is not None else ys[b_idx]
-            _annotations.append((b_idx, _wow_baseline_y, YELLOW, _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)))
+            _wow_baseline_line_y = ys[b_idx]
+            _wow_baseline_y = baseline_value if baseline_value is not None else _wow_baseline_line_y
+            _annotations.append((b_idx, _wow_baseline_line_y, _wow_baseline_y, YELLOW, _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)))
 
     # baseline_date_2 = DoD baseline (day before yesterday) - GREEN
     _dod_baseline_idx = None
@@ -542,25 +547,29 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         b_idx = _find_baseline_idx(baseline_date_2)
         if b_idx is not None:
             _dod_baseline_idx = b_idx
-            _dod_baseline_y = baseline_value_2 if baseline_value_2 is not None else ys[b_idx]
-            _annotations.append((b_idx, _dod_baseline_y, GREEN, _pct_change_label("DoD", _anomaly_y, _dod_baseline_y)))
+            _dod_baseline_line_y = ys[b_idx]
+            _dod_baseline_y = baseline_value_2 if baseline_value_2 is not None else _dod_baseline_line_y
+            _annotations.append((b_idx, _dod_baseline_line_y, _dod_baseline_y, GREEN, _pct_change_label("DoD", _anomaly_y, _dod_baseline_y)))
 
     # ── Build comparison pairs for connecting lines ───────────────────────
-    # Each pair: (from_idx, from_y, to_idx, to_y, color, label)
+    # Uses line_y (Steep position) for visual arrows so they connect to the dots
     _comparison_pairs = []
     if chart_type == "line" and ys is not None:
         _anomaly_idx_for_pairs = None
+        _anomaly_line_y_for_pairs = None
         if anomaly_date:
             search_xs = all_xs if (group_col and group_col in data[0]) else xs
             for idx, lbl in enumerate(search_xs):
                 if lbl.startswith(anomaly_date):
-                    _anomaly_idx_for_pairs = idx; break
-        if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None and _anomaly_y is not None:
-            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y, _anomaly_idx_for_pairs, _anomaly_y, YELLOW, "WoW"))
-        if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None and _anomaly_y is not None:
-            _comparison_pairs.append((_dod_baseline_idx, _dod_baseline_y, _anomaly_idx_for_pairs, _anomaly_y, GREEN, "DoD"))
-        if _wow_baseline_idx is not None and _pace_idx is not None and _pace_y is not None:
-            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y, _pace_idx, _pace_y, ORANGE, "Pace"))
+                    _anomaly_idx_for_pairs = idx
+                    _anomaly_line_y_for_pairs = ys[idx]
+                    break
+        if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
+            _comparison_pairs.append((_wow_baseline_idx, ys[_wow_baseline_idx], _anomaly_idx_for_pairs, _anomaly_line_y_for_pairs, YELLOW, "WoW"))
+        if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
+            _comparison_pairs.append((_dod_baseline_idx, ys[_dod_baseline_idx], _anomaly_idx_for_pairs, _anomaly_line_y_for_pairs, GREEN, "DoD"))
+        if _wow_baseline_idx is not None and _pace_idx is not None:
+            _comparison_pairs.append((_wow_baseline_idx, ys[_wow_baseline_idx], _pace_idx, ys[_pace_idx], ORANGE, "Pace"))
 
     # ── Draw annotations ───────────────────────────────────────────────
     if _annotations and ys:
@@ -608,18 +617,18 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
         # ── Dots + small value labels at each point ───────────────────
         seen_xvals = {}
-        for a_idx, a_y, a_color, _text in _annotations:
-            ax.plot(a_idx, a_y, "o", color=a_color, markersize=8, zorder=7,
+        for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
+            ax.plot(a_idx, a_line_y, "o", color=a_color, markersize=8, zorder=7,
                     markeredgecolor=SURFACE, markeredgewidth=1.5)
-            # Value label near the dot
+            # Value label near the dot — shows BQ ground-truth value
             rel = a_idx / max(n_pts - 1, 1)
             ha_dot = "right" if rel > 0.85 else ("left" if rel < 0.15 else "center")
             x_off  = -8    if rel > 0.85 else (8    if rel < 0.15 else 0)
             y_off  = 9 + seen_xvals.get(a_idx, 0) * 16
             seen_xvals[a_idx] = seen_xvals.get(a_idx, 0) + 1
             ax.annotate(
-                _fmt_val(a_y),
-                xy=(a_idx, a_y),
+                _fmt_val(a_label_y),
+                xy=(a_idx, a_line_y),
                 xytext=(x_off, y_off), textcoords="offset points",
                 fontsize=7.5, color=a_color, ha=ha_dot, va="bottom",
                 fontweight="600", zorder=8,
@@ -629,8 +638,8 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         # Place pills in a horizontal row under the x-axis so they never
         # overlap with the connecting bracket lines drawn above the data.
         n_pills = len(_annotations)
-        for i, (_a_idx, _a_y, a_color, a_text) in enumerate(_annotations):
-            x_pos = (i + 0.5) / n_pills  # evenly spaced across figure width
+        for i, (_a_idx, _a_line_y, _a_label_y, a_color, a_text) in enumerate(_annotations):
+            x_pos = (i + 0.5) / n_pills
             fig.text(
                 x_pos, 0.01, a_text,
                 ha="center", va="bottom",
