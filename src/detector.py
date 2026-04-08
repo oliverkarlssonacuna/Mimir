@@ -147,92 +147,176 @@ class Detector:
     def check_only(self, progress_callback=None) -> list[Anomaly]:
         """Run anomaly checks using only BQ snapshot data — no Steep API calls.
 
+        Fetches all snapshot data in 2 batch queries, then compares in memory.
         Used by the monitor loop; snapshot collection is handled by the snapshot job.
         """
+        from datetime import timedelta
+        from google.cloud import bigquery as _bq
+
         now = datetime.now(timezone.utc)
         current_hour = now.hour
         today_str = now.strftime("%Y-%m-%d")
+        from_date = (now.date() - timedelta(days=9)).isoformat()
+
+        metric_ids = [m["metric_id"] for m in self._metric_configs]
+        if not metric_ids:
+            return []
+
+        id_list = ", ".join(f"'{mid}'" for mid in metric_ids)
+
+        # ── Batch query 1: today's current snapshot per metric ──────────────
+        sql_today = (
+            f"SELECT metric_id, cumulative_value, snapshot_hour "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            f"WHERE metric_id IN ({id_list}) "
+            f"AND snapshot_date = '{today_str}' "
+            f"AND snapshot_hour <= {current_hour} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY metric_id ORDER BY snapshot_hour DESC, captured_at DESC) = 1"
+        )
+
+        # ── Batch query 2: last 9 days final values per metric ───────────────
+        sql_history = (
+            f"SELECT metric_id, snapshot_date, MAX(cumulative_value) as value "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            f"WHERE metric_id IN ({id_list}) "
+            f"AND snapshot_date >= '{from_date}' "
+            f"AND snapshot_date < '{today_str}' "
+            f"GROUP BY metric_id, snapshot_date"
+        )
+
+        # ── Batch query 3: last week same hour (pace) per metric ─────────────
+        last_week_str = (now.date() - timedelta(days=7)).isoformat()
+        sql_pace = (
+            f"SELECT metric_id, cumulative_value "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            f"WHERE metric_id IN ({id_list}) "
+            f"AND snapshot_date = '{last_week_str}' "
+            f"AND snapshot_hour = {current_hour} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY metric_id ORDER BY captured_at DESC) = 1"
+        )
+
+        try:
+            today_rows = self.bq.run_query(sql_today)
+            history_rows = self.bq.run_query(sql_history)
+            pace_rows = self.bq.run_query(sql_pace)
+        except Exception as e:
+            logger.error("check_only batch query failed: %s", e)
+            return []
+
+        # Build lookup dicts
+        today_values: dict[str, float] = {r["metric_id"]: r["cumulative_value"] for r in today_rows}
+        pace_values: dict[str, float] = {r["metric_id"]: r["cumulative_value"] for r in pace_rows}
+        # historical[metric_id][date_str] = value
+        historical: dict[str, dict[str, float]] = {}
+        for r in history_rows:
+            mid = r["metric_id"]
+            historical.setdefault(mid, {})[str(r["snapshot_date"])] = r["value"]
 
         anomalies: list[Anomaly] = []
         total = len(self._metric_configs)
-        _lock = threading.Lock()
-        _counter = [0]
 
-        def _check_one(metric: dict) -> list[Anomaly]:
+        for i, metric in enumerate(self._metric_configs):
             metric_id = metric["metric_id"]
             label = metric["metric_label"]
             direction = metric.get("direction", "down_is_bad")
             display_format = metric.get("display_format") or "number"
-            result: list[Anomaly] = []
 
-            try:
-                # Get today's current value from BQ snapshot
-                current_value = self._get_nearest_snapshot(metric_id, today_str, current_hour)
-                if current_value is None:
-                    logger.info("%s: no BQ snapshot for today, skipping.", label)
-                    return result
+            current_value = today_values.get(metric_id)
+            if current_value is None:
+                logger.info("%s: no BQ snapshot for today, skipping.", label)
+                if progress_callback:
+                    progress_callback(i + 1, total, label)
+                continue
 
-                # Build historical dict from BQ snapshots (last 9 days final values)
-                historical = self._get_historical_from_bq(metric_id, today_str)
+            metric_hist = historical.get(metric_id, {})
+            metric_thresholds = {
+                comp: float(metric.get(f"{comp}_threshold", THRESHOLDS[comp]))
+                for comp in ("pace", "dod", "wow")
+            }
 
-                metric_thresholds = {
-                    comp: float(metric.get(f"{comp}_threshold", THRESHOLDS[comp]))
-                    for comp in ("pace", "dod", "wow")
-                }
-                result.extend(
-                    self._check_metric(
-                        metric_id, label, direction, today_str, current_hour,
-                        current_value, metric_thresholds, historical, display_format,
-                    )
-                )
-            except Exception as e:
-                logger.error("check_only failed for %s: %s", label, e)
-            finally:
-                with _lock:
-                    _counter[0] += 1
-                    if progress_callback:
-                        progress_callback(_counter[0], total, label)
+            # Run comparisons in memory — override pace baseline with batch value
+            result = self._check_metric_from_cache(
+                metric_id, label, direction, today_str, current_hour,
+                current_value, metric_thresholds, metric_hist,
+                pace_baseline=pace_values.get(metric_id),
+                display_format=display_format,
+            )
+            anomalies.extend(result)
 
-            return result
+            if progress_callback:
+                progress_callback(i + 1, total, label)
 
-        with ThreadPoolExecutor(max_workers=8) as executor:
-            steep_futures = [executor.submit(_check_one, m) for m in self._metric_configs]
-            bq_future = executor.submit(self.check_bq_metrics)
-
-            for future in as_completed(steep_futures):
-                try:
-                    anomalies.extend(future.result())
-                except Exception as e:
-                    logger.error("Unhandled error in check_only worker: %s", e)
-
-            try:
-                anomalies.extend(bq_future.result())
-            except Exception as e:
-                logger.error("BQ metric check failed: %s", e)
+        # BQ metrics (SQL-based) still run as before
+        try:
+            anomalies.extend(self.check_bq_metrics())
+        except Exception as e:
+            logger.error("BQ metric check failed: %s", e)
 
         return anomalies
 
-    def _get_historical_from_bq(self, metric_id: str, today_str: str) -> dict[str, float]:
-        """Fetch last 9 days of final daily values from BQ snapshots."""
+    def _check_metric_from_cache(
+        self,
+        metric_id: str, label: str, direction: str,
+        today_str: str, current_hour: int, current_value: float,
+        metric_thresholds: dict,
+        historical: dict[str, float],
+        pace_baseline: float | None,
+        display_format: str = "number",
+    ) -> list[Anomaly]:
+        """Like _check_metric but uses pre-fetched pace_baseline instead of BQ query."""
         from datetime import timedelta
-        from google.cloud import bigquery as _bq
         today = datetime.strptime(today_str, "%Y-%m-%d").date()
-        from_date = (today - timedelta(days=9)).isoformat()
-        sql = (
-            f"SELECT snapshot_date, MAX(cumulative_value) as value "
-            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
-            "WHERE metric_id = @metric_id "
-            "AND snapshot_date >= @from_date "
-            "AND snapshot_date < @today "
-            "GROUP BY snapshot_date"
-        )
-        params = [
-            _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
-            _bq.ScalarQueryParameter("from_date", "DATE", from_date),
-            _bq.ScalarQueryParameter("today", "DATE", today_str),
-        ]
-        rows = self.bq.run_query(sql, params=params)
-        return {str(r["snapshot_date"]): r["value"] for r in rows}
+        yesterday = today - timedelta(days=1)
+        day_before = today - timedelta(days=2)
+        same_weekday_last_week = today - timedelta(days=7)
+
+        anomalies: list[Anomaly] = []
+
+        # Pace check — use pre-fetched baseline
+        if pace_baseline is not None and pace_baseline != 0:
+            anomaly = self._evaluate(
+                metric_id, label, direction, "pace",
+                current_value, pace_baseline,
+                metric_thresholds["pace"],
+                reference_date=today_str,
+                display_format=display_format,
+                baseline_date=same_weekday_last_week.isoformat(),
+            )
+            if anomaly:
+                anomalies.append(anomaly)
+
+        # DoD check
+        yesterday_val = historical.get(yesterday.isoformat())
+        day_before_val = historical.get(day_before.isoformat())
+        if yesterday_val is not None and day_before_val is not None and day_before_val != 0:
+            anomaly = self._evaluate(
+                metric_id, label, direction, "dod",
+                yesterday_val, day_before_val,
+                metric_thresholds["dod"],
+                reference_date=yesterday.isoformat(),
+                display_format=display_format,
+                baseline_date=day_before.isoformat(),
+            )
+            if anomaly:
+                anomalies.append(anomaly)
+
+        # WoW check
+        baseline_start = datetime.strptime(Config.BASELINE_START_DATE, "%Y-%m-%d").date()
+        last_week_val = historical.get(same_weekday_last_week.isoformat())
+        if (same_weekday_last_week > baseline_start
+                and yesterday_val is not None and last_week_val is not None and last_week_val != 0):
+            anomaly = self._evaluate(
+                metric_id, label, direction, "wow",
+                yesterday_val, last_week_val,
+                metric_thresholds["wow"],
+                reference_date=yesterday.isoformat(),
+                display_format=display_format,
+                baseline_date=same_weekday_last_week.isoformat(),
+            )
+            if anomaly:
+                anomalies.append(anomaly)
+
+        return anomalies
 
     # ── Fetch from Steep ──────────────────────────────────────────────────
 
