@@ -624,6 +624,9 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
     metric_info = next((m for m in detector._metric_configs if m["metric_id"] == metric_id), None)
 
     if action == "analyse" and metric_info:
+        # Guard against double-acknowledge (e.g. user double-clicked)
+        if interaction.response.is_done():
+            return
         await interaction.response.defer(thinking=True)
 
         # Disable buttons and mark as "analysing" on the original message
@@ -720,8 +723,9 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
             def _fetch_jira():
                 try:
-                    releases = jira_client.get_releases_near_date(ref_date_obj, Config.JIRA_PROJECT_KEY)
-                    return jira_client.format_release_context(releases, ref_date_obj) or "No Jira releases found near this date."
+                    _ref_dt = datetime.strptime(reference_date, "%Y-%m-%d").date()
+                    releases = jira_client.get_releases_near_date(_ref_dt, Config.JIRA_PROJECT_KEY)
+                    return jira_client.format_release_context(releases, _ref_dt) or "No Jira releases found near this date."
                 except Exception as e:
                     logger.error("Jira lookup failed: %s", e)
                     return f"Jira lookup failed: {e}"
