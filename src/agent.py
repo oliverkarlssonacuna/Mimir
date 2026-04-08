@@ -277,7 +277,7 @@ def _thin_ticks(ax, xs: list[str], max_ticks: int = 15):
         ax.set_xticklabels([xs[i] for i in tick_positions], rotation=40, ha="right", fontsize=9)
 
 
-def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "", pace_date: str = "") -> str:
+def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "", pace_date: str = "", anomaly_value: float | None = None, baseline_value: float | None = None, baseline_value_2: float | None = None, pace_value: float | None = None) -> str:
     """Render a chart and save to a temp PNG. Returns the file path."""
     import matplotlib
     matplotlib.use("Agg")
@@ -475,7 +475,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 anomaly_idx = idx
                 break
         if anomaly_idx is not None and chart_type == "line" and ys is not None:
-            _anomaly_y = ys[anomaly_idx]
+            _anomaly_y = anomaly_value if anomaly_value is not None else ys[anomaly_idx]
             _annotations.append((anomaly_idx, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
 
     # pace_date = Pace current (today) - ORANGE
@@ -488,7 +488,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 _pace_idx = idx
                 break
         if _pace_idx is not None:
-            _pace_y = ys[_pace_idx]
+            _pace_y = pace_value if pace_value is not None else ys[_pace_idx]
             _annotations.append((_pace_idx, _pace_y, ORANGE, f"Pace (today)  ·  {_fmt_val(_pace_y)}"))
 
     def _find_baseline_idx(baseline_dt):
@@ -532,7 +532,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         b_idx = _find_baseline_idx(baseline_date)
         if b_idx is not None:
             _wow_baseline_idx = b_idx
-            _wow_baseline_y = ys[b_idx]
+            _wow_baseline_y = baseline_value if baseline_value is not None else ys[b_idx]
             _annotations.append((b_idx, _wow_baseline_y, YELLOW, _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)))
 
     # baseline_date_2 = DoD baseline (day before yesterday) - GREEN
@@ -542,7 +542,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         b_idx = _find_baseline_idx(baseline_date_2)
         if b_idx is not None:
             _dod_baseline_idx = b_idx
-            _dod_baseline_y = ys[b_idx]
+            _dod_baseline_y = baseline_value_2 if baseline_value_2 is not None else ys[b_idx]
             _annotations.append((b_idx, _dod_baseline_y, GREEN, _pct_change_label("DoD", _anomaly_y, _dod_baseline_y)))
 
     # ── Build comparison pairs for connecting lines ───────────────────────

@@ -784,6 +784,21 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             import json as _json
             steep_json = _json.dumps(steep_data)
 
+            # Extract BQ ground-truth dot values from saved_anomalies
+            _chart_anomaly_val = None
+            _chart_baseline_val = None
+            _chart_baseline_val_2 = None
+            _chart_pace_val = None
+            for sa in saved_anomalies:
+                if sa.comparison in ("wow", "dod") and _chart_anomaly_val is None:
+                    _chart_anomaly_val = sa.current_value
+                if sa.comparison == "wow" and _chart_baseline_val is None:
+                    _chart_baseline_val = sa.baseline_value
+                if sa.comparison == "dod" and _chart_baseline_val_2 is None:
+                    _chart_baseline_val_2 = sa.baseline_value
+                if sa.comparison == "pace":
+                    _chart_pace_val = sa.current_value
+
             # Pre-render chart in thread executor — savefig blocks event loop if run inline
             from agent import _plot_results
             import asyncio as _asyncio, functools as _functools
@@ -800,6 +815,10 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     baseline_date=baseline_date or "",
                     baseline_date_2=baseline_date_2 or "",
                     pace_date=chart_pace_date,
+                    anomaly_value=_chart_anomaly_val,
+                    baseline_value=_chart_baseline_val,
+                    baseline_value_2=_chart_baseline_val_2,
+                    pace_value=_chart_pace_val,
                 )
             )
             pre_chart = chart_path if not chart_path.startswith("error") else None
