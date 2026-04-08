@@ -734,13 +734,42 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     logger.warning("Could not fetch context notes: %s", e)
                     return "None"
 
-            with _TPE(max_workers=3) as pre_exec:
+            def _fetch_correlations():
+                try:
+                    # Use WoW baseline date (same day last week) vs anomaly date for correlation
+                    corr_baseline = baseline_date or (today_date - _td(days=7)).isoformat()
+                    corr_anomaly  = chart_anomaly_date
+                    rows = bq.get_correlated_metrics(
+                        exclude_metric_id=metric_id,
+                        baseline_date=corr_baseline,
+                        anomaly_date=corr_anomaly,
+                        min_pct=20.0,
+                        top_n=3,
+                    )
+                    if not rows:
+                        return "None"
+                    lines = []
+                    for r in rows:
+                        pct = r["pct_change"]
+                        arrow = "▲" if pct > 0 else "▼"
+                        lines.append(
+                            f"- {r['metric_label']}: {arrow} {abs(pct):.1f}% "
+                            f"({r['baseline_val']:,.1f} → {r['anomaly_val']:,.1f})"
+                        )
+                    return "\n".join(lines)
+                except Exception as e:
+                    logger.warning("Correlation fetch failed: %s", e)
+                    return "None"
+
+            with _TPE(max_workers=4) as pre_exec:
                 steep_future = pre_exec.submit(_fetch_steep)
                 jira_future = pre_exec.submit(_fetch_jira)
                 notes_future = pre_exec.submit(_fetch_notes)
+                corr_future  = pre_exec.submit(_fetch_correlations)
                 steep_data = steep_future.result()
                 jira_context = jira_future.result()
                 context_notes = notes_future.result()
+                correlated_metrics = corr_future.result()
 
             import json as _json
             steep_json = _json.dumps(steep_data)
@@ -777,6 +806,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 f"## Game milestones (use these to explain peaks, dips, and trends):\n{Config.GAME_MILESTONES}\n\n"
                 f"## Jira releases near {reference_date}:\n{jira_context}\n\n"
                 f"## Team context notes:\n{context_notes}\n\n"
+                f"## Other metrics that moved ≥20% on the same day (same-direction = systemic, opposite = isolated):\n{correlated_metrics}\n\n"
                 "## Instructions\n"
                 "You are analysing a mobile game analytics metric. A chart is already attached — do NOT generate a chart or call any functions.\n\n"
                 "Write a focused analysis of 4-6 sentences. Structure it as follows:\n"
@@ -785,9 +815,11 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "Look for peaks after releases, dips after beta close, spikes around launch events. "
                 "If a milestone or release closely precedes or coincides with the anomaly, name it explicitly as the likely cause. "
                 "If a milestone is far from the anomaly date but the trend since that date is relevant, mention the trend.\n"
-                "3. **Broader trend** — briefly describe the overall shape of the data over the shown period "
+                "3. **Correlated metrics** — if other metrics moved similarly, mention 1-2 by name and use that to confirm or rule out a systemic cause. "
+                "If no other metrics moved, note that the drop appears isolated to this metric.\n"
+                "4. **Broader trend** — briefly describe the overall shape of the data over the shown period "
                 "(e.g. growing since beta launch, declining since beta closed, flat since v0.64, volatile).\n"
-                "4. **Confidence** — if you're speculating, say so in one short clause (e.g. 'likely related to…', 'possibly caused by…'). "
+                "5. **Confidence** — if you're speculating, say so in one short clause (e.g. 'likely related to…', 'possibly caused by…'). "
                 "Do NOT hedge with 'it could be many things' or 'investigate further'.\n\n"
                 "Be direct and specific. Use numbers. Reference dates explicitly when relevant.\n"
             )
