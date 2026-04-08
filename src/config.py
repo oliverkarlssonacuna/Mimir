@@ -57,6 +57,15 @@ class Config:
     # Beta launch date – data before this is unreliable
     BASELINE_START_DATE: str = "2026-03-09"
 
+    # High-level game milestones — injected into every deep analysis prompt
+    GAME_MILESTONES: str = (
+        "Pre-Alpha (JOGO): DreamHack demo Nov 2022; FFA playtests Feb 2023; v0.6.0-alpha released May 2023.\n"
+        "Alpha test: December 2025.\n"
+        "Closed Beta: 9 March 2026 – 30 March 2026.\n"
+        "v0.64.0 internal release: 9 April 2026.\n"
+        "Official launch (v1.00): planned 7 May 2026."
+    )
+
     # Admin web UI URL (used in /admin Discord command)
     ADMIN_URL: str = _optional("ADMIN_URL", "http://localhost:8080")
 

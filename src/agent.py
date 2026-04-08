@@ -277,7 +277,7 @@ def _thin_ticks(ax, xs: list[str], max_ticks: int = 15):
         ax.set_xticklabels([xs[i] for i in tick_positions], rotation=40, ha="right", fontsize=9)
 
 
-def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "") -> str:
+def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "", pace_date: str = "") -> str:
     """Render a chart and save to a temp PNG. Returns the file path."""
     import matplotlib
     matplotlib.use("Agg")
@@ -463,10 +463,10 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
     # ── Collect all annotation points to avoid overlap ────────────────────
     _annotations = []  # list of (idx, y, color, label_text)
-    _anomaly_y = None  # track anomaly value for % change on baselines
-    logger.info("Annotations input: anomaly_date=%r baseline_date=%r baseline_date_2=%r chart_type=%r ys_is_none=%s",
-                anomaly_date, baseline_date, baseline_date_2, chart_type, ys is None)
+    _anomaly_y = None   # WoW/DoD current value
+    _pace_y = None      # Pace current value
 
+    # anomaly_date = WoW/DoD current (yesterday) - RED
     if anomaly_date and chart_type != "pie":
         search_xs = all_xs if (group_col and group_col in data[0]) else xs
         anomaly_idx = None
@@ -477,6 +477,19 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         if anomaly_idx is not None and chart_type == "line" and ys is not None:
             _anomaly_y = ys[anomaly_idx]
             _annotations.append((anomaly_idx, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
+
+    # pace_date = Pace current (today) - ORANGE
+    ORANGE = "#fb923c"  # orange-400
+    _pace_idx = None
+    if pace_date and chart_type == "line" and ys is not None:
+        search_xs = all_xs if (group_col and group_col in data[0]) else xs
+        for idx, lbl in enumerate(search_xs):
+            if lbl.startswith(pace_date):
+                _pace_idx = idx
+                break
+        if _pace_idx is not None:
+            _pace_y = ys[_pace_idx]
+            _annotations.append((_pace_idx, _pace_y, ORANGE, f"Pace (today)  ·  {_fmt_val(_pace_y)}"))
 
     def _find_baseline_idx(baseline_dt):
         search_xs_b = all_xs if (group_col and group_col in data[0]) else xs
@@ -504,34 +517,86 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 pass
         return b_idx
 
-    def _pct_change_label(prefix, baseline_val):
+    def _pct_change_label(prefix, current_val, baseline_val):
         """Build label like 'WoW ▼ 26.5%  (18 → 1)' showing change."""
-        if _anomaly_y is None or baseline_val is None or baseline_val == 0:
+        if current_val is None or baseline_val is None or baseline_val == 0:
             return f"{prefix}  ·  {_fmt_val(baseline_val or 0)}"
-        pct = ((_anomaly_y - baseline_val) / abs(baseline_val)) * 100
+        pct = ((current_val - baseline_val) / abs(baseline_val)) * 100
         arrow = "▲" if pct > 0 else "▼"
-        return f"{prefix}  {arrow} {abs(pct):.1f}%  ({_fmt_pair(baseline_val, _anomaly_y)})"
+        return f"{prefix}  {arrow} {abs(pct):.1f}%  ({_fmt_pair(baseline_val, current_val)})"
 
+    # baseline_date = WoW/Pace baseline (same day last week) - YELLOW
+    _wow_baseline_idx = None
+    _wow_baseline_y = None
     if baseline_date and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date)
-        logger.info("WoW baseline_date=%s b_idx=%s", baseline_date, b_idx)
         if b_idx is not None:
-            _annotations.append((b_idx, ys[b_idx], YELLOW, _pct_change_label("WoW", ys[b_idx])))
+            _wow_baseline_idx = b_idx
+            _wow_baseline_y = ys[b_idx]
+            _annotations.append((b_idx, _wow_baseline_y, YELLOW, _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)))
 
+    # baseline_date_2 = DoD baseline (day before yesterday) - GREEN
+    _dod_baseline_idx = None
+    _dod_baseline_y = None
     if baseline_date_2 and chart_type == "line" and ys is not None:
         b_idx = _find_baseline_idx(baseline_date_2)
-        logger.info("DoD baseline_date_2=%s b_idx=%s", baseline_date_2, b_idx)
         if b_idx is not None:
-            _annotations.append((b_idx, ys[b_idx], GREEN, _pct_change_label("DoD", ys[b_idx])))
+            _dod_baseline_idx = b_idx
+            _dod_baseline_y = ys[b_idx]
+            _annotations.append((b_idx, _dod_baseline_y, GREEN, _pct_change_label("DoD", _anomaly_y, _dod_baseline_y)))
+
+    # ── Build comparison pairs for connecting lines ───────────────────────
+    # Each pair: (from_idx, from_y, to_idx, to_y, color, label)
+    _comparison_pairs = []
+    if chart_type == "line" and ys is not None:
+        _anomaly_idx_for_pairs = None
+        if anomaly_date:
+            search_xs = all_xs if (group_col and group_col in data[0]) else xs
+            for idx, lbl in enumerate(search_xs):
+                if lbl.startswith(anomaly_date):
+                    _anomaly_idx_for_pairs = idx; break
+        if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None and _anomaly_y is not None:
+            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y, _anomaly_idx_for_pairs, _anomaly_y, YELLOW, "WoW"))
+        if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None and _anomaly_y is not None:
+            _comparison_pairs.append((_dod_baseline_idx, _dod_baseline_y, _anomaly_idx_for_pairs, _anomaly_y, GREEN, "DoD"))
+        if _wow_baseline_idx is not None and _pace_idx is not None and _pace_y is not None:
+            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y, _pace_idx, _pace_y, ORANGE, "Pace"))
 
     # ── Draw annotations ───────────────────────────────────────────────
     if _annotations and ys:
         n_pts = len(xs) if xs else 1
+        y_max = max(ys) if ys else 1
+        y_min = min(ys) if ys else 0
+        y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
+
+        # ── Connecting lines between comparison pairs ─────────────────
+        for ci, (from_idx, from_y, to_idx, to_y, c_color, c_label) in enumerate(_comparison_pairs):
+            pct = ((to_y - from_y) / abs(from_y)) * 100 if from_y != 0 else 0
+            arrow_str = "▼" if pct < 0 else "▲"
+            mid_x = (from_idx + to_idx) / 2
+            # Place the bracket line above the data or near the top
+            y_level = y_max + y_range * (0.08 + ci * 0.13)
+            # Vertical stems from dot to bracket level
+            ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
+                    ls=":", alpha=0.7, zorder=5)
+            ax.plot([to_idx, to_idx], [to_y, y_level], color=c_color, lw=0.8,
+                    ls=":", alpha=0.7, zorder=5)
+            # Horizontal bracket line with arrowheads
+            ax.annotate("", xy=(to_idx, y_level), xytext=(from_idx, y_level),
+                        arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
+                                        mutation_scale=10,
+                                        connectionstyle="arc3,rad=0.0"),
+                        zorder=6)
+            # Label in the middle of the bracket
+            ax.text(mid_x, y_level + y_range * 0.03,
+                    f"{c_label} {arrow_str} {abs(pct):.1f}%",
+                    ha="center", va="bottom", fontsize=7.5, color=c_color,
+                    fontweight="700", zorder=9)
 
         # ── Dots + small value labels at each point ───────────────────
         seen_xvals = {}
         for a_idx, a_y, a_color, _text in _annotations:
-            ax.plot(a_idx, a_y, "o", color=a_color, markersize=7, zorder=7,
+            ax.plot(a_idx, a_y, "o", color=a_color, markersize=8, zorder=7,
                     markeredgecolor=SURFACE, markeredgewidth=1.5)
             # Value label near the dot
             rel = a_idx / max(n_pts - 1, 1)

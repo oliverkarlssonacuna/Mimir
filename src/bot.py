@@ -227,6 +227,38 @@ async def admin_link(interaction: discord.Interaction):
     await interaction.response.send_message("🔧 Mimir admin panel:", view=view, ephemeral=True)
 
 
+# ── /notes command group ──────────────────────────────────────────────────────
+notes_group = app_commands.Group(name="notes", description="Manage context notes for deep analysis (release dates, events, etc.)")
+
+@notes_group.command(name="add", description="Add a context note — e.g. 'Apr 7: Closed Android beta'")
+@app_commands.describe(text="The note to add")
+async def notes_add(interaction: discord.Interaction, text: str):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, lambda: bq.add_note(text, interaction.user.display_name))
+    await interaction.followup.send(f"✅ Note added: *{text}*", ephemeral=True)
+
+@notes_group.command(name="view", description="View all current context notes")
+async def notes_view(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    loop = asyncio.get_running_loop()
+    rows = await loop.run_in_executor(None, bq.get_notes)
+    if not rows:
+        await interaction.followup.send("📋 No context notes yet. Use `/notes add` to add one.", ephemeral=True)
+        return
+    lines = [f"• `{r['created_at'][:10]}` **{r['added_by'] or 'unknown'}**: {r['note']}" for r in rows]
+    await interaction.followup.send("📋 **Context notes:**\n" + "\n".join(lines), ephemeral=True)
+
+@notes_group.command(name="clear", description="Clear all context notes")
+async def notes_clear(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    loop = asyncio.get_running_loop()
+    deleted = await loop.run_in_executor(None, bq.clear_notes)
+    await interaction.followup.send(f"🗑️ Cleared {deleted} note(s).", ephemeral=True)
+
+tree.add_command(notes_group)
+
+
 def _group_anomalies(anomalies: list[Anomaly]) -> dict[str, list[Anomaly]]:
     """Group a list of anomalies by metric_id, preserving order."""
     grouped: dict[str, list[Anomaly]] = {}
@@ -560,6 +592,9 @@ async def on_ready():
     synced = await tree.sync()
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
+    # Ensure context notes table exists in BQ
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, bq.ensure_notes_table)
     await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
@@ -658,8 +693,18 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # Pre-fetch data in parallel to reduce Gemini round-trips
             today = datetime.now().strftime("%Y-%m-%d")
             baseline = Config.BASELINE_START_DATE
-            ref_date_obj = datetime.strptime(reference_date, "%Y-%m-%d").date()
-            days_since_baseline = (ref_date_obj - datetime.strptime(baseline, "%Y-%m-%d").date()).days + 1
+            today_date = datetime.strptime(today, "%Y-%m-%d").date()
+            baseline_date_obj = datetime.strptime(baseline, "%Y-%m-%d").date()
+            # Always include today in the chart so pace (current=today) has a data point
+            days_since_baseline = (today_date - baseline_date_obj).days + 2
+
+            # Determine correct anomaly date for each triggered comparison type
+            from datetime import timedelta as _td
+            triggered_comps = {sa.comparison for sa in saved_anomalies}
+            yesterday_str = (today_date - _td(days=1)).isoformat()
+            # WoW/DoD reference = yesterday (completed day); Pace reference = today
+            chart_anomaly_date = yesterday_str if ("wow" in triggered_comps or "dod" in triggered_comps) else today
+            chart_pace_date = today if "pace" in triggered_comps else ""
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
             def _fetch_steep():
@@ -678,11 +723,21 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     logger.error("Jira lookup failed: %s", e)
                     return f"Jira lookup failed: {e}"
 
-            with _TPE(max_workers=2) as pre_exec:
+            def _fetch_notes():
+                try:
+                    rows = bq.get_notes()
+                    return "\n".join(f"- [{r['created_at'][:10]}] {r['note']}" for r in rows) if rows else "None"
+                except Exception as e:
+                    logger.warning("Could not fetch context notes: %s", e)
+                    return "None"
+
+            with _TPE(max_workers=3) as pre_exec:
                 steep_future = pre_exec.submit(_fetch_steep)
                 jira_future = pre_exec.submit(_fetch_jira)
+                notes_future = pre_exec.submit(_fetch_notes)
                 steep_data = steep_future.result()
                 jira_context = jira_future.result()
+                context_notes = notes_future.result()
 
             import json as _json
             steep_json = _json.dumps(steep_data)
@@ -699,9 +754,10 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     x_col="date",
                     y_col="value",
                     title=metric_info["metric_label"],
-                    anomaly_date=reference_date,
+                    anomaly_date=chart_anomaly_date,
                     baseline_date=baseline_date or "",
                     baseline_date_2=baseline_date_2 or "",
+                    pace_date=chart_pace_date,
                 )
             )
             pre_chart = chart_path if not chart_path.startswith("error") else None
@@ -711,20 +767,26 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 f"Today's date: {today}\n\n"
                 f"## Metric: {metric_info['metric_label']} (id: {metric_id})\n"
                 f"Direction: {metric_info['direction']}\n"
-                f"Anomalies detected on {reference_date}: {triggered_comparisons}\n"
+                f"Anomaly detected on {reference_date}: {triggered_comparisons}\n"
                 f"{anomaly_detail}\n\n"
                 f"## Daily data ({baseline} to {reference_date}):\n"
                 f"{steep_json}\n\n"
-                f"## Jira releases (use these to explain anomalies):\n{jira_context}\n\n"
+                f"## Game milestones (use these to explain peaks, dips, and trends):\n{Config.GAME_MILESTONES}\n\n"
+                f"## Jira releases near {reference_date}:\n{jira_context}\n\n"
+                f"## Team context notes:\n{context_notes}\n\n"
                 "## Instructions\n"
-                "This is a mobile game analytics metric. "
-                "A chart is already attached — do NOT generate a chart or call any functions.\n"
-                "Write a concise analysis (3-5 sentences). Focus on:\n"
-                "1. What the data actually shows (quantify the change)\n"
-                "2. Whether the Jira releases explain the anomaly (e.g. a beta closing, a major release, a rollback)\n"
-                "3. If no release explains it, give the most likely specific cause based on the data pattern\n"
-                "Do NOT list generic possible causes. Do NOT say 'investigate further'. "
-                "Be direct and specific.\n"
+                "You are analysing a mobile game analytics metric. A chart is already attached — do NOT generate a chart or call any functions.\n\n"
+                "Write a focused analysis of 4-6 sentences. Structure it as follows:\n"
+                "1. **What happened** — describe the anomaly quantitatively (e.g. 'DAU dropped 38% vs last week, from 1 420 to 880').\n"
+                "2. **Why it happened** — cross-reference the data pattern against the game milestones, Jira releases, and team notes. "
+                "Look for peaks after releases, dips after beta close, spikes around launch events. "
+                "If a milestone or release closely precedes or coincides with the anomaly, name it explicitly as the likely cause. "
+                "If a milestone is far from the anomaly date but the trend since that date is relevant, mention the trend.\n"
+                "3. **Broader trend** — briefly describe the overall shape of the data over the shown period "
+                "(e.g. growing since beta launch, declining since beta closed, flat since v0.64, volatile).\n"
+                "4. **Confidence** — if you're speculating, say so in one short clause (e.g. 'likely related to…', 'possibly caused by…'). "
+                "Do NOT hedge with 'it could be many things' or 'investigate further'.\n\n"
+                "Be direct and specific. Use numbers. Reference dates explicitly when relevant.\n"
             )
 
             loop = asyncio.get_running_loop()

@@ -85,6 +85,40 @@ class BQClient:
         ]
         return self.run_update(sql, params)
 
+    # ── Context notes (team-provided release/event dates) ─────────────────
+    NOTES_TABLE = "lia-project-sandbox-deletable.anomaly_checks_demo.context_notes"
+
+    def ensure_notes_table(self) -> None:
+        """Create the context_notes table if it doesn't exist."""
+        self.client.query(
+            f"""CREATE TABLE IF NOT EXISTS `{self.NOTES_TABLE}` (
+                note       STRING    NOT NULL,
+                added_by   STRING,
+                created_at TIMESTAMP
+            )"""
+        ).result()
+
+    def add_note(self, note: str, added_by: str = "") -> None:
+        from google.cloud import bigquery as _bq
+        sql = (
+            f"INSERT INTO `{self.NOTES_TABLE}` (note, added_by, created_at) "
+            "VALUES (@note, @added_by, CURRENT_TIMESTAMP())"
+        )
+        params = [
+            _bq.ScalarQueryParameter("note", "STRING", note),
+            _bq.ScalarQueryParameter("added_by", "STRING", added_by),
+        ]
+        self.run_update(sql, params)
+
+    def get_notes(self) -> list[dict]:
+        return self.run_query(
+            f"SELECT note, added_by, created_at FROM `{self.NOTES_TABLE}` "
+            "ORDER BY created_at DESC LIMIT 100"
+        )
+
+    def clear_notes(self) -> int:
+        return self.run_update(f"DELETE FROM `{self.NOTES_TABLE}` WHERE TRUE")
+
     @staticmethod
     def _serialize(v: Any) -> Any:
         if isinstance(v, Decimal):
