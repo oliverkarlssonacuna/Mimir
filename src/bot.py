@@ -695,8 +695,6 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             baseline = Config.BASELINE_START_DATE
             today_date = datetime.strptime(today, "%Y-%m-%d").date()
             baseline_date_obj = datetime.strptime(baseline, "%Y-%m-%d").date()
-            # Always include today in the chart so pace (current=today) has a data point
-            days_since_baseline = (today_date - baseline_date_obj).days + 2
 
             # Determine correct anomaly date for each triggered comparison type
             from datetime import timedelta as _td
@@ -705,6 +703,11 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # WoW/DoD reference = yesterday (completed day); Pace reference = today
             chart_anomaly_date = yesterday_str if ("wow" in triggered_comps or "dod" in triggered_comps) else today
             chart_pace_date = today if "pace" in triggered_comps else ""
+
+            # Only include today's partial data if Pace is triggered (today is the current point)
+            # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
+            chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
+            days_since_baseline = (chart_end_date - baseline_date_obj).days + 2
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
             def _fetch_steep():
