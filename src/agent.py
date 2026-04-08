@@ -56,9 +56,9 @@ Strong day-of-week effect: Thursday/Friday ~30% lower, weekends ~40% higher.
 
 ## Rules
 - Be concise but include important numbers.
-- When analysing an anomaly: 1) fetch recent data, 2) draw a graph, 3) provide a summary with possible explanation.
-- If the anomaly coincides with a release (±7 days), mention it.
-- Always include a recommendation: "investigate further", "likely normal", etc.
+- When analysing an anomaly: 1) fetch recent data, 2) draw a graph, 3) provide a summary with specific explanation.
+- If the anomaly coincides with a release or game milestone (±7 days), name it explicitly as the likely cause.
+- Do NOT say "investigate further" — commit to the most likely explanation based on the data and context.
 - If a metric's data includes `"unit": "%"`, its values are already in percentage scale (e.g. 13.4 means 13.4%). Always append `%` when showing the raw values.
 """
 
@@ -339,7 +339,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     ACCENT_COLORS = [ACCENT, RED, GREEN, YELLOW, "#f472b6", "#22d3ee"]
 
     # ── Figure setup ──────────────────────────────────────────────────────
-    fig, ax = plt.subplots(figsize=(14, 5.5))
+    fig, ax = plt.subplots(figsize=(14, 6.5))
     fig.patch.set_facecolor(BG)
     ax.set_facecolor(SURFACE)
 
@@ -612,15 +612,17 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 fontweight="600", zorder=8,
             )
 
-        # ── Pills in top-right corner ─────────────────────────────────
+        # ── Pills below the chart (fig coordinates) ──────────────────
+        # Place pills in a horizontal row under the x-axis so they never
+        # overlap with the connecting bracket lines drawn above the data.
+        n_pills = len(_annotations)
         for i, (_a_idx, _a_y, a_color, a_text) in enumerate(_annotations):
-            ax.annotate(
-                a_text,
-                xy=(1, 1), xycoords="axes fraction",
-                xytext=(-10, -10 - i * 22), textcoords="offset points",
+            x_pos = (i + 0.5) / n_pills  # evenly spaced across figure width
+            fig.text(
+                x_pos, 0.01, a_text,
+                ha="center", va="bottom",
                 fontsize=8, color=a_color, fontweight="500",
-                ha="right", va="top",
-                bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE,
+                bbox=dict(boxstyle="round,pad=0.45", facecolor=SURFACE,
                           edgecolor=a_color, alpha=0.95, linewidth=0.7),
                 zorder=8,
             )
@@ -630,6 +632,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     ax.set_xlabel("")
 
     fig.tight_layout(pad=2.5)
+    # Extra bottom room for the annotation pills row
+    if _annotations:
+        fig.subplots_adjust(bottom=0.13)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="mimir_chart_")
     fig.savefig(tmp.name, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
