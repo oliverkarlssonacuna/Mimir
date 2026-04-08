@@ -736,13 +736,15 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
             def _fetch_correlations():
                 try:
-                    # Use WoW baseline date (same day last week) vs anomaly date for correlation
                     corr_baseline = baseline_date or (today_date - _td(days=7)).isoformat()
                     corr_anomaly  = chart_anomaly_date
+                    # Determine direction from the first saved anomaly's change_pct
+                    direction = 1 if (saved_anomalies and saved_anomalies[0].change_pct >= 0) else -1
                     rows = bq.get_correlated_metrics(
                         exclude_metric_id=metric_id,
                         baseline_date=corr_baseline,
                         anomaly_date=corr_anomaly,
+                        anomaly_direction=direction,
                         min_pct=20.0,
                         top_n=3,
                     )

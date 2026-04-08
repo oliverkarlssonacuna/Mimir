@@ -91,16 +91,16 @@ class BQClient:
         exclude_metric_id: str,
         baseline_date: str,
         anomaly_date: str,
+        anomaly_direction: int,   # +1 = metric went up, -1 = went down
         min_pct: float = 20.0,
         top_n: int = 3,
     ) -> list[dict]:
-        """Return up to top_n metrics (excluding the analysed one) that moved
-        ≥ min_pct in the same direction between baseline_date and anomaly_date.
-
-        Returns list of dicts with keys: metric_id, metric_label, baseline_val,
-        anomaly_val, pct_change.
+        """Return up to top_n metrics that moved ≥ min_pct in the SAME direction
+        as the analysed metric between baseline_date and anomaly_date.
         """
         from google.cloud import bigquery as _bq
+        # direction_sign: 1 means we want positive pct_change, -1 means negative
+        direction_filter = "anomaly_val > baseline_val" if anomaly_direction >= 0 else "anomaly_val < baseline_val"
         sql = f"""
             WITH
               vals AS (
@@ -125,6 +125,7 @@ class BQClient:
             FROM vals
             WHERE baseline_val IS NOT NULL AND anomaly_val IS NOT NULL
               AND baseline_val != 0
+              AND {direction_filter}
               AND ABS(SAFE_DIVIDE(anomaly_val - baseline_val, ABS(baseline_val))) >= @min_pct_dec
             ORDER BY ABS(SAFE_DIVIDE(anomaly_val - baseline_val, ABS(baseline_val))) DESC
             LIMIT @top_n
