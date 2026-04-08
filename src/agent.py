@@ -569,29 +569,48 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         y_min = min(ys) if ys else 0
         y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
 
+        # Expand y-axis top so bracket labels are never clipped
+        n_brackets = len(_comparison_pairs)
+        if n_brackets:
+            ax.set_ylim(top=y_max + y_range * (0.25 + n_brackets * 0.18))
+
         # ── Connecting lines between comparison pairs ─────────────────
         for ci, (from_idx, from_y, to_idx, to_y, c_color, c_label) in enumerate(_comparison_pairs):
             pct = ((to_y - from_y) / abs(from_y)) * 100 if from_y != 0 else 0
             arrow_str = "▼" if pct < 0 else "▲"
             mid_x = (from_idx + to_idx) / 2
-            # Place the bracket line above the data or near the top
-            y_level = y_max + y_range * (0.08 + ci * 0.13)
-            # Vertical stems from dot to bracket level
-            ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
-                    ls=":", alpha=0.7, zorder=5)
-            ax.plot([to_idx, to_idx], [to_y, y_level], color=c_color, lw=0.8,
-                    ls=":", alpha=0.7, zorder=5)
-            # Horizontal bracket line with arrowheads
-            ax.annotate("", xy=(to_idx, y_level), xytext=(from_idx, y_level),
-                        arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
-                                        mutation_scale=10,
-                                        connectionstyle="arc3,rad=0.0"),
-                        zorder=6)
-            # Label in the middle of the bracket
-            ax.text(mid_x, y_level + y_range * 0.03,
-                    f"{c_label} {arrow_str} {abs(pct):.1f}%",
-                    ha="center", va="bottom", fontsize=7.5, color=c_color,
-                    fontweight="700", zorder=9)
+            y_level = y_max + y_range * (0.12 + ci * 0.18)
+            # Use arc when points are close (≤3 indices apart) so the arrow is visible
+            span = abs(to_idx - from_idx)
+            rad = 0.4 if span <= 3 else 0.0
+            if rad == 0.0:
+                # Straight bracket: vertical stems + horizontal arrow
+                ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
+                        ls=":", alpha=0.7, zorder=5)
+                ax.plot([to_idx, to_idx], [to_y, y_level], color=c_color, lw=0.8,
+                        ls=":", alpha=0.7, zorder=5)
+                ax.annotate("", xy=(to_idx, y_level), xytext=(from_idx, y_level),
+                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
+                                            mutation_scale=10,
+                                            connectionstyle="arc3,rad=0.0"),
+                            zorder=6)
+                ax.text(mid_x, y_level + y_range * 0.03,
+                        f"{c_label} {arrow_str} {abs(pct):.1f}%",
+                        ha="center", va="bottom", fontsize=7.5, color=c_color,
+                        fontweight="700", zorder=9)
+            else:
+                # Arc arrow directly between dots (no stems needed)
+                ax.annotate("", xy=(to_idx, to_y), xytext=(from_idx, from_y),
+                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
+                                            mutation_scale=10,
+                                            connectionstyle=f"arc3,rad={rad}"),
+                            zorder=6)
+                # Label above the arc midpoint
+                arc_y = max(from_y, to_y) + y_range * (0.08 + ci * 0.12)
+                ax.text(mid_x, arc_y,
+                        f"{c_label} {arrow_str} {abs(pct):.1f}%",
+                        ha="center", va="bottom", fontsize=7.5, color=c_color,
+                        fontweight="700", zorder=9)
 
         # ── Dots + small value labels at each point ───────────────────
         seen_xvals = {}
