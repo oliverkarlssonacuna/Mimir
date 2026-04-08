@@ -740,12 +740,16 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     corr_anomaly  = chart_anomaly_date
                     # Determine direction from the first saved anomaly's change_pct
                     direction = 1 if (saved_anomalies and saved_anomalies[0].change_pct >= 0) else -1
+                    # Proportional threshold: correlated metric must move ≥50% of main metric's move,
+                    # with a floor of 30% to avoid noise on modest anomalies
+                    main_pct = abs(saved_anomalies[0].change_pct * 100) if saved_anomalies else 50.0
+                    min_pct = max(30.0, main_pct * 0.5)
                     rows = bq.get_correlated_metrics(
                         exclude_metric_id=metric_id,
                         baseline_date=corr_baseline,
                         anomaly_date=corr_anomaly,
                         anomaly_direction=direction,
-                        min_pct=20.0,
+                        min_pct=min_pct,
                         top_n=3,
                     )
                     if not rows:
