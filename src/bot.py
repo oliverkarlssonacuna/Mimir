@@ -805,13 +805,29 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             pre_chart = chart_path if not chart_path.startswith("error") else None
 
             # Single Gemini call — only analysis text, no tool calls
+            # Build ground-truth trigger values from saved_anomalies (these are the
+            # EXACT values that triggered the alert — use these, not Steep API values)
+            trigger_lines = []
+            for sa in saved_anomalies:
+                comp_label = _comparison_label(sa.comparison)
+                if sa.display_format == "percent":
+                    cur_fmt  = f"{sa.current_value * 100:.2f}%"
+                    base_fmt = f"{sa.baseline_value * 100:.2f}%"
+                else:
+                    cur_fmt  = f"{sa.current_value:,.1f}"
+                    base_fmt = f"{sa.baseline_value:,.1f}"
+                trigger_lines.append(
+                    f"- {comp_label}: {base_fmt} → {cur_fmt} ({sa.change_pct:+.1%})"
+                )
+            trigger_values_block = "\n".join(trigger_lines)
+
             prompt = (
                 f"Today's date: {today}\n\n"
                 f"## Metric: {metric_info['metric_label']} (id: {metric_id})\n"
-                f"Direction: {metric_info['direction']}\n"
-                f"Anomaly detected on {reference_date}: {triggered_comparisons}\n"
-                f"{anomaly_detail}\n\n"
-                f"## Daily data ({baseline} to {reference_date}):\n"
+                f"Direction: {metric_info['direction']}\n\n"
+                f"## TRIGGER VALUES (ground truth — use THESE exact numbers in your analysis, not values from the daily data):\n"
+                f"{trigger_values_block}\n\n"
+                f"## Daily data ({baseline} to {reference_date}) — use for trend/context only:\n"
                 f"{steep_json}\n\n"
                 f"## Game milestones:\n{Config.GAME_MILESTONES}\n\n"
                 f"## Jira releases near {reference_date}:\n{jira_context}\n\n"
