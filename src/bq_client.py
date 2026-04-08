@@ -48,9 +48,19 @@ class BQClient:
         job.result()  # wait for completion
         return job.num_dml_affected_rows or 0
 
-    def load_metric_configs(self, table: str, enabled_only: bool = True) -> list[dict[str, Any]]:
+    def load_metric_configs(
+        self,
+        table: str,
+        enabled_only: bool = True,
+        collect_data_only: bool = False,
+    ) -> list[dict[str, Any]]:
         """Load metric configs from BQ. Returns list of dicts."""
-        where = "WHERE enabled = TRUE " if enabled_only else ""
+        conditions = []
+        if enabled_only:
+            conditions.append("enabled = TRUE")
+        if collect_data_only:
+            conditions.append("collect_data = TRUE")
+        where = ("WHERE " + " AND ".join(conditions) + " ") if conditions else ""
         sql = f"SELECT * FROM `{table}` {where}ORDER BY metric_label"
         return self.run_query(sql)
 

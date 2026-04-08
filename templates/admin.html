@@ -304,6 +304,9 @@
                   onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
                 <span class="flex items-center justify-center gap-1">Status <span class="tooltip-icon" data-tip="Active metrics are monitored. Inactive metrics are skipped.">ⓘ</span><svg class="sort-icon inline-block w-4 h-4 ml-1.5 flex-shrink-0" style="color:#6b7385; vertical-align:-3px;" fill="none" stroke="currentColor" stroke-width="2.5" viewBox="0 0 24 24"><path class="sort-path" stroke-linecap="round" stroke-linejoin="round" d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg></span>
               </th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">
+                <span class="flex items-center justify-center gap-1">Collect <span class="tooltip-icon" data-tip="When off, no snapshot data is collected for this metric. Alerts are also suppressed.">ⓘ</span></span>
+              </th>
               <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide cursor-pointer select-none"
                   style="color:#4f5668;" data-sortcol="updated" onclick="sortTable('updated')"
                   onmouseover="this.style.color='#9aa0b4'" onmouseout="this.style.color='#4f5668'">
@@ -397,6 +400,23 @@
                     <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
                          style="left:{{ '22px' if m.enabled else '2px' }};"
                          id="toggle-thumb-{{ m.metric_id }}"></div>
+                  </div>
+                </label>
+              </td>
+
+              <!-- Collect data toggle -->
+              <td class="px-4 py-4 text-center">
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only"
+                         data-metric="{{ m.metric_id }}"
+                         {{ 'checked' if m.collect_data != False else '' }}
+                         onchange="toggleCollect('{{ m.metric_id }}', this.checked, this)">
+                  <div class="w-10 h-5 rounded-full relative transition-colors"
+                       style="background:{{ '#059669' if m.collect_data != False else '#2a2d38' }};"
+                       id="collect-track-{{ m.metric_id }}">
+                    <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
+                         style="left:{{ '22px' if m.collect_data != False else '2px' }};"
+                         id="collect-thumb-{{ m.metric_id }}"></div>
                   </div>
                 </label>
               </td>
@@ -501,6 +521,9 @@
               <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">DoD %</th>
               <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">WoW %</th>
               <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Status</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">
+                <span class="flex items-center justify-center gap-1">Collect <span class="tooltip-icon" data-tip="When off, no snapshot data is collected for this metric.">ⓘ</span></span>
+              </th>
               <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Actions</th>
             </tr>
           </thead>
@@ -574,6 +597,23 @@
                     <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
                          style="left:{{ '22px' if m.enabled else '2px' }};"
                          id="bq-toggle-thumb-{{ m.metric_id }}"></div>
+                  </div>
+                </label>
+              </td>
+
+              <!-- Collect data toggle -->
+              <td class="px-4 py-4 text-center">
+                <label class="relative inline-flex items-center cursor-pointer">
+                  <input type="checkbox" class="sr-only"
+                         data-metric="{{ m.metric_id }}"
+                         {{ 'checked' if m.collect_data != False else '' }}
+                         onchange="toggleBqCollect('{{ m.metric_id }}', this.checked, this)">
+                  <div class="w-10 h-5 rounded-full relative transition-colors"
+                       style="background:{{ '#059669' if m.collect_data != False else '#2a2d38' }};"
+                       id="bq-collect-track-{{ m.metric_id }}">
+                    <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
+                         style="left:{{ '22px' if m.collect_data != False else '2px' }};"
+                         id="bq-collect-thumb-{{ m.metric_id }}"></div>
                   </div>
                 </label>
               </td>
@@ -1171,6 +1211,66 @@
       }
     }
 
+
+    // ── Collect data toggle ────────────────────────────────────────────────────
+
+    async function toggleCollect(metricId, collect_data, checkbox) {
+      checkbox.disabled = true;
+      const track = document.getElementById(`collect-track-${metricId}`);
+      const thumb = document.getElementById(`collect-thumb-${metricId}`);
+
+      try {
+        const resp = await fetch(`/api/metrics/${encodeURIComponent(metricId)}/toggle-collect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ collect_data }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+
+        if (track) track.style.background = collect_data ? '#059669' : '#2a2d38';
+        if (thumb) thumb.style.left       = collect_data ? '22px' : '2px';
+        showToast(`Data collection ${collect_data ? 'enabled' : 'disabled'}`);
+
+      } catch (err) {
+        checkbox.checked = !collect_data;
+        showToast(`Failed: ${err.message}`, true);
+      } finally {
+        checkbox.disabled = false;
+      }
+    }
+
+    async function toggleBqCollect(metricId, collect_data, checkbox) {
+      checkbox.disabled = true;
+      const track = document.getElementById(`bq-collect-track-${metricId}`);
+      const thumb = document.getElementById(`bq-collect-thumb-${metricId}`);
+
+      try {
+        const resp = await fetch(`/api/bq-monitors/${encodeURIComponent(metricId)}/toggle-collect`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ collect_data }),
+        });
+
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({}));
+          throw new Error(err.detail || `HTTP ${resp.status}`);
+        }
+
+        if (track) track.style.background = collect_data ? '#059669' : '#2a2d38';
+        if (thumb) thumb.style.left       = collect_data ? '22px' : '2px';
+        showToast(`Data collection ${collect_data ? 'enabled' : 'disabled'}`);
+
+      } catch (err) {
+        checkbox.checked = !collect_data;
+        showToast(`Failed: ${err.message}`, true);
+      } finally {
+        checkbox.disabled = false;
+      }
+    }
 
     // ── Bulk selection ─────────────────────────────────────────────────────────
 

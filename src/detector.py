@@ -37,20 +37,29 @@ class Detector:
         self._metric_configs: list[dict] = []
         self.reload_configs()
 
-    def reload_configs(self, enabled_only: bool = True) -> None:
+    def reload_configs(self, *, enabled_only: bool = True, collect_data_only: bool = False) -> None:
         """Load metric configs from BQ into memory cache."""
-        self._metric_configs = self.bq.load_metric_configs(Config.BQ_METRIC_CONFIGS_TABLE, enabled_only=enabled_only)
+        self._metric_configs = self.bq.load_metric_configs(
+            Config.BQ_METRIC_CONFIGS_TABLE,
+            enabled_only=enabled_only,
+            collect_data_only=collect_data_only,
+        )
         logger.info("Loaded %d metric configs from BQ.", len(self._metric_configs))
-        self._bq_metric_configs = self._load_bq_metric_configs()
+        self._bq_metric_configs = self._load_bq_metric_configs(
+            enabled_only=enabled_only, collect_data_only=collect_data_only
+        )
         logger.info("Loaded %d BQ metric configs.", len(self._bq_metric_configs))
 
-    def _load_bq_metric_configs(self) -> list[dict]:
-        """Load enabled BQ metric configs (those with a sql_query)."""
+    def _load_bq_metric_configs(self, enabled_only: bool = True, collect_data_only: bool = False) -> list[dict]:
+        """Load BQ metric configs (those with a sql_query)."""
         try:
-            sql = (
-                f"SELECT * FROM `{Config.BQ_METRICS_CONFIGS_TABLE}` "
-                "WHERE enabled = TRUE AND sql_query IS NOT NULL AND sql_query != ''"
-            )
+            conditions = ["sql_query IS NOT NULL", "sql_query != ''"]
+            if enabled_only:
+                conditions.append("enabled = TRUE")
+            if collect_data_only:
+                conditions.append("collect_data = TRUE")
+            where = "WHERE " + " AND ".join(conditions)
+            sql = f"SELECT * FROM `{Config.BQ_METRICS_CONFIGS_TABLE}` {where}"
             return self.bq.run_query(sql)
         except Exception as e:
             logger.warning("Could not load BQ metric configs: %s", e)

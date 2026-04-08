@@ -474,7 +474,53 @@ async def toggle_metric(metric_id: str, request: Request):
 
     return {"ok": True}
 
-@app.post("/api/metrics/bulk-threshold")
+@app.post("/api/metrics/{metric_id}/toggle-collect")
+
+async def toggle_metric_collect(metric_id: str, request: Request):
+
+    user = _user(request)
+
+    if not user:
+
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+
+    collect_data = body.get("collect_data")
+
+    if not isinstance(collect_data, bool):
+
+        raise HTTPException(status_code=400, detail="collect_data must be a boolean")
+
+    from google.cloud import bigquery as _bq
+
+    sql = (
+
+        f"UPDATE `{Config.BQ_METRIC_CONFIGS_TABLE}` "
+
+        "SET collect_data = @collect_data, updated_at = CURRENT_TIMESTAMP() "
+
+        "WHERE metric_id = @metric_id"
+
+    )
+
+    params = [
+
+        _bq.ScalarQueryParameter("collect_data", "BOOL", collect_data),
+
+        _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+
+    ]
+
+    rows = bq.run_update(sql, params)
+
+    if rows == 0:
+
+        raise HTTPException(status_code=404, detail="Metric not found")
+
+    logger.info("[admin] %s toggled collect_data %s -> %s", user["email"], metric_id, collect_data)
+
+    return {"ok": True}
 
 async def bulk_update_threshold(request: Request):
 
@@ -1004,6 +1050,54 @@ async def toggle_bq_monitor(metric_id: str, request: Request):
     logger.info("[admin] %s toggled BQ metric %s -> enabled=%s", user["email"], metric_id, enabled)
 
     await _signal_bot_reload()
+
+    return {"ok": True}
+
+@app.post("/api/bq-monitors/{metric_id}/toggle-collect")
+
+async def toggle_bq_monitor_collect(metric_id: str, request: Request):
+
+    user = _user(request)
+
+    if not user:
+
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    body = await request.json()
+
+    collect_data = body.get("collect_data")
+
+    if not isinstance(collect_data, bool):
+
+        raise HTTPException(status_code=400, detail="collect_data must be a boolean")
+
+    from google.cloud import bigquery as _bq
+
+    sql = (
+
+        f"UPDATE `{Config.BQ_METRICS_CONFIGS_TABLE}` "
+
+        "SET collect_data = @collect_data, updated_at = CURRENT_TIMESTAMP() "
+
+        "WHERE metric_id = @metric_id"
+
+    )
+
+    params = [
+
+        _bq.ScalarQueryParameter("collect_data", "BOOL", collect_data),
+
+        _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+
+    ]
+
+    rows = bq.run_update(sql, params)
+
+    if rows == 0:
+
+        raise HTTPException(status_code=404, detail="Metric not found")
+
+    logger.info("[admin] %s toggled BQ collect_data %s -> %s", user["email"], metric_id, collect_data)
 
     return {"ok": True}
 
