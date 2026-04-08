@@ -48,9 +48,10 @@ class BQClient:
         job.result()  # wait for completion
         return job.num_dml_affected_rows or 0
 
-    def load_metric_configs(self, table: str) -> list[dict[str, Any]]:
-        """Load all enabled metric configs from BQ. Returns list of dicts."""
-        sql = f"SELECT * FROM `{table}` WHERE enabled = TRUE ORDER BY metric_label"
+    def load_metric_configs(self, table: str, enabled_only: bool = True) -> list[dict[str, Any]]:
+        """Load metric configs from BQ. Returns list of dicts."""
+        where = "WHERE enabled = TRUE " if enabled_only else ""
+        sql = f"SELECT * FROM `{table}` {where}ORDER BY metric_label"
         return self.run_query(sql)
 
     def update_threshold(

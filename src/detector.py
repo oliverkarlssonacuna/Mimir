@@ -37,9 +37,9 @@ class Detector:
         self._metric_configs: list[dict] = []
         self.reload_configs()
 
-    def reload_configs(self) -> None:
+    def reload_configs(self, enabled_only: bool = True) -> None:
         """Load metric configs from BQ into memory cache."""
-        self._metric_configs = self.bq.load_metric_configs(Config.BQ_METRIC_CONFIGS_TABLE)
+        self._metric_configs = self.bq.load_metric_configs(Config.BQ_METRIC_CONFIGS_TABLE, enabled_only=enabled_only)
         logger.info("Loaded %d metric configs from BQ.", len(self._metric_configs))
         self._bq_metric_configs = self._load_bq_metric_configs()
         logger.info("Loaded %d BQ metric configs.", len(self._bq_metric_configs))

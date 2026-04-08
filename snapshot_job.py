@@ -27,6 +27,7 @@ def main():
     detector = Detector(steep=steep, bq=bq)
 
     try:
+        detector.reload_configs(enabled_only=False)  # collect snapshots for all metrics, not just enabled
         anomalies = detector.collect_and_check()
         logger.info("Snapshot job complete. %d anomalies detected (not alerted).", len(anomalies))
     except Exception as e:

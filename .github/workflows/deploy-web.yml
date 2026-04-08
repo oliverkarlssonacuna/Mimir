@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
     paths:
+      - "web/**"
       - "src/**"
       - "templates/**"
       - "static/**"
