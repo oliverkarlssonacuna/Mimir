@@ -1233,6 +1233,15 @@
 
         if (track) track.style.background = collect_data ? '#059669' : '#2a2d38';
         if (thumb) thumb.style.left       = collect_data ? '22px' : '2px';
+
+        if (!collect_data) {
+          const enabledCb = document.querySelector(`input[data-metric="${metricId}"][onchange*="toggleMetric"]`);
+          if (enabledCb && enabledCb.checked) {
+            enabledCb.checked = false;
+            await toggleMetric(metricId, false, enabledCb);
+          }
+        }
+
         showToast(`Data collection ${collect_data ? 'enabled' : 'disabled'}`);
 
       } catch (err) {
@@ -1262,6 +1271,16 @@
 
         if (track) track.style.background = collect_data ? '#059669' : '#2a2d38';
         if (thumb) thumb.style.left       = collect_data ? '22px' : '2px';
+
+        // When collect is turned off, also disable alerts for this metric
+        if (!collect_data) {
+          const enabledCb = document.querySelector(`input[data-metric="${metricId}"][onchange*="toggleBqMonitor"]`);
+          if (enabledCb && enabledCb.checked) {
+            enabledCb.checked = false;
+            await toggleBqMonitor(metricId, false, enabledCb);
+          }
+        }
+
         showToast(`Data collection ${collect_data ? 'enabled' : 'disabled'}`);
 
       } catch (err) {
