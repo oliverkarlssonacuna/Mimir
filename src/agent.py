@@ -599,18 +599,12 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                         ha="center", va="bottom", fontsize=7.5, color=c_color,
                         fontweight="700", zorder=9)
             else:
-                # Arc arrow directly between dots (no stems needed)
+                # Arc arrow directly between dots — label is in the pill row below
                 ax.annotate("", xy=(to_idx, to_y), xytext=(from_idx, from_y),
-                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
+                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.5,
                                             mutation_scale=10,
                                             connectionstyle=f"arc3,rad={rad}"),
                             zorder=6)
-                # Label above the arc midpoint
-                arc_y = max(from_y, to_y) + y_range * (0.08 + ci * 0.12)
-                ax.text(mid_x, arc_y,
-                        f"{c_label} {arrow_str} {abs(pct):.1f}%",
-                        ha="center", va="bottom", fontsize=7.5, color=c_color,
-                        fontweight="700", zorder=9)
 
         # ── Dots + small value labels at each point ───────────────────
         seen_xvals = {}
