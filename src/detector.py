@@ -235,6 +235,8 @@ class Detector:
                 latest = latest_dates.get(mid)
                 # Calculate hours since latest snapshot
                 if latest is not None:
+                    if isinstance(latest, str):
+                        latest = datetime.strptime(latest, "%Y-%m-%d").date()
                     latest_dt = datetime.combine(latest, datetime.min.time()).replace(tzinfo=timezone.utc)
                     hours_old = (now - latest_dt).total_seconds() / 3600
                 else:
