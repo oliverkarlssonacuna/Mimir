@@ -75,7 +75,7 @@ class SteepClient:
         if slice_id:
             body["sliceId"] = slice_id
 
-        for attempt in range(3):  # max 3 attempts (10s timeout each)
+        for attempt in range(3):  # max 3 attempts (10s timeout each), fail fast
             try:
                 resp = self.session.post(
                     f"{BASE_URL}/v1/metrics/{metric_id}/query",
