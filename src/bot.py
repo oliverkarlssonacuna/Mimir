@@ -171,14 +171,20 @@ async def status(interaction: discord.Interaction):
             )
 
     try:
-        anomalies = await loop.run_in_executor(
+        anomalies, failed_labels = await loop.run_in_executor(
             None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
         await progress_msg.edit(content=f"❌ Error during check: {e}")
         return
 
-    await progress_msg.edit(content=f"✅ Done — checked `{total_metrics}` metrics.")
+    failed_count = len(failed_labels)
+    checked_count = total_metrics - failed_count
+    fail_note = ""
+    if failed_labels:
+        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
+        fail_note = f" ⚠️ {failed_count} could not be fetched: {failed_list}"
+    await progress_msg.edit(content=f"✅ Done — checked `{checked_count}/{total_metrics}` metrics.{fail_note}")
 
     if not anomalies:
         embed = discord.Embed(
@@ -389,37 +395,46 @@ async def monitor_loop():
         logger.error("Alert channel %s not found", alert_channel_id)
         return
 
+    error_channel_id = Config.DISCORD_ERROR_CHANNEL_ID
+    error_channel = bot.get_channel(int(error_channel_id)) if error_channel_id else channel
+    if not error_channel:
+        error_channel = channel
+
     total_metrics = len(detector._metric_configs)
-    progress_msg = await channel.send(f"⏳ Checking metrics... `0/{total_metrics}` {'░' * 20}")
-
     loop = asyncio.get_running_loop()
-    last_update = [0]
-
-    def make_bar(current: int, total: int) -> str:
-        filled = int(20 * current / total) if total else 0
-        bar = '█' * filled + '░' * (20 - filled)
-        pct = int(100 * current / total) if total else 0
-        return f"⏳ Checking metrics... `{current}/{total}` `{bar}` {pct}%"
-
-    def on_progress(current: int, total: int, label: str):
-        if current - last_update[0] >= 5 or current == total:
-            last_update[0] = current
-            asyncio.run_coroutine_threadsafe(
-                progress_msg.edit(content=make_bar(current, total)), loop
-            )
 
     try:
-        anomalies = await loop.run_in_executor(
-            None, lambda: detector.check_only(progress_callback=on_progress)
+        anomalies, failed_labels = await loop.run_in_executor(
+            None, lambda: detector.check_only()
         )
     except Exception as e:
-        logger.error("Monitor check failed: %s", e)
-        await progress_msg.edit(content=f"❌ Check failed: {e}")
+        logger.error("Monitor check failed: %s", e, exc_info=True)
+        await error_channel.send(f"❌ Monitor check failed: {e}")
         return
+
+    failed_count = len(failed_labels)
+    checked_count = total_metrics - failed_count
+
+    if failed_labels:
+        now_cest = datetime.utcnow() + timedelta(hours=2)
+        embed = discord.Embed(
+            title="⚠️ Mimir – fetch errors",
+            color=discord.Color.orange(),
+            timestamp=datetime.utcnow(),
+        )
+        embed.add_field(name="Time (CEST)", value=now_cest.strftime("%Y-%m-%d %H:%M"), inline=True)
+        embed.add_field(name="Coverage", value=f"`{checked_count}/{total_metrics}` metrics checked", inline=True)
+        by_error: dict[str, list[str]] = {}
+        for lbl, err in failed_labels:
+            by_error.setdefault(err, []).append(lbl)
+        lines = [f"**{et}**: {', '.join(f'`{l}`' for l in ls)}" for et, ls in by_error.items()]
+        embed.add_field(name=f"Failed metrics ({failed_count})", value="\n".join(lines), inline=False)
+        embed.set_footer(text="Mimir — Error Monitor")
+        await error_channel.send(embed=embed)
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await progress_msg.edit(content=f"✅ All clear — checked `{total_metrics}` metrics, no anomalies detected.")
+        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -432,6 +447,7 @@ async def monitor_loop():
 
     if not new_anomalies:
         logger.info("Monitor: anomalies exist but already alerted today.")
+        await channel.send(f"✅ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
         return
 
     grouped = _group_anomalies(new_anomalies)

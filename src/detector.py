@@ -67,10 +67,10 @@ class Detector:
 
     # ── Main entry point ──────────────────────────────────────────────────    
 
-    def collect_and_check(self, progress_callback=None) -> list[Anomaly]:
+    def collect_and_check(self, progress_callback=None) -> tuple[list[Anomaly], list[tuple[str, str]]]:
         """Collect snapshots from Steep, save to BQ, run comparisons.
 
-        Returns a list of Anomaly objects (empty if all is well).
+        Returns (anomalies, failed_labels) where failed_labels is a list of (label, error_str).
         progress_callback: optional callable(current, total, label) called after each metric.
         """
         now = datetime.now(timezone.utc)
@@ -78,33 +78,37 @@ class Detector:
         today_str = now.strftime("%Y-%m-%d")
 
         anomalies: list[Anomaly] = []
+        failed_labels: list[tuple[str, str]] = []
         total = len(self._metric_configs)
         _lock = threading.Lock()
         _counter = [0]
 
-        def _process_one(metric: dict) -> list[Anomaly]:
+        def _process_one(metric: dict) -> tuple[list[Anomaly], list[tuple[str, str]]]:
             metric_id = metric["metric_id"]
             label = metric["metric_label"]
             direction = metric.get("direction", "down_is_bad")
             result: list[Anomaly] = []
 
+            failed: list[tuple[str, str]] = []
             try:
                 value, refreshed_at, historical = self._fetch_values(metric_id)
             except Exception as e:
                 logger.error("Failed to fetch %s from Steep: %s", label, e)
+                failed.append((label, type(e).__name__))
                 with _lock:
                     _counter[0] += 1
                     if progress_callback:
                         progress_callback(_counter[0], total, label)
-                return result
+                return result, failed
 
             if value is None:
                 logger.warning("No data for %s today, skipping.", label)
+                failed.append((label, "No data"))
                 with _lock:
                     _counter[0] += 1
                     if progress_callback:
                         progress_callback(_counter[0], total, label)
-                return result
+                return result, failed
 
             if not self._already_captured(metric_id, today_str, value):
                 self._save_snapshot(metric_id, label, today_str, current_hour, value, refreshed_at)
@@ -125,7 +129,7 @@ class Detector:
                 if progress_callback:
                     progress_callback(_counter[0], total, label)
 
-            return result
+            return result, failed
 
         with ThreadPoolExecutor(max_workers=8) as executor:
             steep_futures = [executor.submit(_process_one, m) for m in self._metric_configs]
@@ -133,7 +137,9 @@ class Detector:
 
             for future in as_completed(steep_futures):
                 try:
-                    anomalies.extend(future.result())
+                    res, fl = future.result()
+                    anomalies.extend(res)
+                    failed_labels.extend(fl)
                 except Exception as e:
                     logger.error("Unhandled error in metric worker: %s", e)
 
@@ -142,13 +148,14 @@ class Detector:
             except Exception as e:
                 logger.error("BQ metric check failed: %s", e)
 
-        return anomalies
+        return anomalies, failed_labels
 
-    def check_only(self, progress_callback=None) -> list[Anomaly]:
+    def check_only(self, progress_callback=None) -> tuple[list[Anomaly], list[tuple[str, str]]]:
         """Run anomaly checks using only BQ snapshot data — no Steep API calls.
 
         Fetches all snapshot data in 2 batch queries, then compares in memory.
         Used by the monitor loop; snapshot collection is handled by the snapshot job.
+        Returns (anomalies, failed_labels).
         """
         from datetime import timedelta
         from google.cloud import bigquery as _bq
@@ -195,13 +202,14 @@ class Detector:
             f"QUALIFY ROW_NUMBER() OVER (PARTITION BY metric_id ORDER BY captured_at DESC) = 1"
         )
 
+        failed_labels: list[tuple[str, str]] = []
         try:
             today_rows = self.bq.run_query(sql_today)
             history_rows = self.bq.run_query(sql_history)
             pace_rows = self.bq.run_query(sql_pace)
         except Exception as e:
             logger.error("check_only batch query failed: %s", e)
-            return []
+            return [], []
 
         # Build lookup dicts
         today_values: dict[str, float] = {r["metric_id"]: r["cumulative_value"] for r in today_rows}
@@ -259,6 +267,7 @@ class Detector:
                                 self._save_snapshot(mid, label, today_str, current_hour, value, refreshed_at)
                     except Exception as e:
                         logger.warning("%s: Steep fallback failed: %s", label, e)
+                        failed_labels.append((label, f"Steep {type(e).__name__}"))
                 else:
                     # Latest snapshot is fresh enough — use it
                     label = next((m["metric_label"] for m in self._metric_configs if m["metric_id"] == mid), mid)
@@ -287,6 +296,7 @@ class Detector:
             current_value = today_values.get(metric_id)
             if current_value is None:
                 logger.info("%s: no BQ snapshot for today, skipping.", label)
+                failed_labels.append((label, "No snapshot"))
                 if progress_callback:
                     progress_callback(i + 1, total, label)
                 continue
@@ -315,7 +325,7 @@ class Detector:
         except Exception as e:
             logger.error("BQ metric check failed: %s", e)
 
-        return anomalies
+        return anomalies, failed_labels
 
     def _check_metric_from_cache(
         self,
