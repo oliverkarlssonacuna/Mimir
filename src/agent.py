@@ -239,10 +239,15 @@ def _query_steep_metric(steep_client: Any, metric_id: str, days: int = 14, time_
         points = {p["time"][:10]: p["metric"] for p in data}
 
         if time_grain == "daily" and points:
-            # Fill missing dates with 0
+            # Fill missing dates with 0, always extending to yesterday
+            # so the anomaly date is always included even if Steep hasn't published it yet
+            from datetime import date as _date
             all_dates = sorted(points.keys())
             start = datetime.strptime(all_dates[0], "%Y-%m-%d").date()
-            end = datetime.strptime(all_dates[-1], "%Y-%m-%d").date()
+            end = max(
+                datetime.strptime(all_dates[-1], "%Y-%m-%d").date(),
+                _date.today() - timedelta(days=1),
+            )
             filled = []
             current = start
             while current <= end:
