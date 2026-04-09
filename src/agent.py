@@ -46,7 +46,7 @@ Strong day-of-week effect: Thursday/Friday ~30% lower, weekends ~40% higher.
 ## Tools
 - `query_steep_metric(metric_id, days, time_grain)` – fetch daily/weekly data from Steep API
 - `get_snapshot_history(metric_id, days)` – fetch saved snapshots (cumulative 4h values) from BQ
-- `plot_results(data, chart_type, x_col, y_col, title)` – draw a chart
+- `plot_results(data, chart_type, x_col, y_col, title, anomaly_date, anomaly_value, baseline_date, baseline_value, baseline_date_2, baseline_value_2, pace_date, pace_value)` – draw a chart. Always pass anomaly_date + anomaly_value, baseline_date + baseline_value (WoW), baseline_date_2 + baseline_value_2 (DoD), and pace_date + pace_value (intraday) when available — these are needed to draw the comparison arrows correctly.
 - `get_jira_releases(date)` – fetch Jira releases near a date
 
 ## Tone
@@ -87,6 +87,7 @@ Strong day-of-week effect: Thursday/Friday ~30% lower, weekends ~40% higher.
 - Be concise but include important numbers.
 - When creating charts, ALWAYS describe what the graph shows in text too.
 - ALWAYS call `query_steep_metric` to fetch fresh data before calling `plot_results`. Never reconstruct or reuse data from previous text responses — always fetch from the API.
+- When calling `plot_results`, always pass `anomaly_date` + `anomaly_value`, `baseline_date` + `baseline_value` (WoW), `baseline_date_2` + `baseline_value_2` (DoD), and `pace_date` + `pace_value` (intraday) whenever those values are known — these are required to draw comparison arrows correctly.
 - Only answer questions about metrics and data. Politely decline if the user asks about other topics.
 - If a metric's data includes `"unit": "%"`, its values are already in percentage scale (e.g. 13.4 means 13.4%). Always append `%` when showing the raw values.
 - When the user mentions a date or time period (e.g. "from the beginning of the year", "since January", "last 30 days", "the past month"), calculate the number of days from that start date to today (today's date is provided at the top of the prompt) and use that as the `days` parameter in `query_steep_metric`. Never guess — always derive `days` from the dates.
@@ -185,6 +186,26 @@ def _get_tools() -> types.Tool:
                     "baseline_date_2": types.Schema(
                         type=types.Type.STRING,
                         description="Optional. Date (YYYY-MM-DD) for a second baseline marker (e.g. DoD baseline, shown in green).",
+                    ),
+                    "pace_date": types.Schema(
+                        type=types.Type.STRING,
+                        description="Optional. Date (YYYY-MM-DD) for today's intraday pace marker (shown in orange).",
+                    ),
+                    "anomaly_value": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Optional. Exact numeric value at the anomaly date (the current/trigger value). Used to place the dot accurately.",
+                    ),
+                    "baseline_value": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Optional. Exact numeric value at the WoW baseline date. Used to place the yellow dot accurately.",
+                    ),
+                    "baseline_value_2": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Optional. Exact numeric value at the DoD baseline date. Used to place the green dot accurately.",
+                    ),
+                    "pace_value": types.Schema(
+                        type=types.Type.NUMBER,
+                        description="Optional. Exact numeric value for today's intraday pace. Used to place the orange dot accurately.",
                     ),
                 },
 
@@ -844,6 +865,11 @@ class Agent:
                         anomaly_change_pct=args.get("anomaly_change_pct", ""),
                         baseline_date=args.get("baseline_date", ""),
                         baseline_date_2=args.get("baseline_date_2", ""),
+                        pace_date=args.get("pace_date", ""),
+                        anomaly_value=float(args["anomaly_value"]) if args.get("anomaly_value") is not None else None,
+                        baseline_value=float(args["baseline_value"]) if args.get("baseline_value") is not None else None,
+                        baseline_value_2=float(args["baseline_value_2"]) if args.get("baseline_value_2") is not None else None,
+                        pace_value=float(args["pace_value"]) if args.get("pace_value") is not None else None,
                     )
                     if not path.startswith("error"):
                         chart_path = path
