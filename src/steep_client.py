@@ -6,6 +6,8 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +18,9 @@ class SteepClient:
     def __init__(self, api_key: str):
         self.api_key = api_key
         self.session = requests.Session()
+        # No automatic retries on connection/SSL errors — we handle retries ourselves
+        adapter = HTTPAdapter(max_retries=Retry(total=0))
+        self.session.mount("https://", adapter)
         self.session.headers.update({
             "Authorization": f"ApiKey {api_key}",
             "Content-Type": "application/json",
@@ -28,6 +33,7 @@ class SteepClient:
         resp = self.session.get(
             f"{BASE_URL}/v1/metrics",
             params={"expand": str(expand).lower()},
+            timeout=5,
         )
         resp.raise_for_status()
         return resp.json().get("data", [])
@@ -69,11 +75,18 @@ class SteepClient:
         if slice_id:
             body["sliceId"] = slice_id
 
-        for attempt in range(6):
-            resp = self.session.post(
-                f"{BASE_URL}/v1/metrics/{metric_id}/query",
-                json=body,
-            )
+        for attempt in range(3):  # max 3 attempts (10s timeout each)
+            try:
+                resp = self.session.post(
+                    f"{BASE_URL}/v1/metrics/{metric_id}/query",
+                    json=body,
+                    timeout=10,
+                )
+            except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
+                wait = 2 ** attempt
+                logger.warning("Steep connection error (attempt %d/3), retrying in %ds: %s", attempt + 1, wait, e)
+                time.sleep(wait)
+                continue
             if resp.status_code == 429:
                 wait = 2 ** attempt
                 logger.warning("Steep rate limited (429), retrying in %ds...", wait)
@@ -82,8 +95,7 @@ class SteepClient:
             resp.raise_for_status()
             time.sleep(0.3)  # throttle to avoid 429 rate limiting
             return resp.json()
-        resp.raise_for_status()
-        return resp.json()
+        raise requests.exceptions.RetryError(f"Steep query failed after 3 attempts for metric {metric_id}")
 
     def query_metric_recent(
         self,
