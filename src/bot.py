@@ -384,14 +384,38 @@ async def monitor_loop():
 
     failed_count = len(failed_labels)
     checked_count = total_metrics - failed_count
-    if failed_labels:
-        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
-        fail_note = f" ⚠️ {failed_count}/{total_metrics} metric(s) could not be fetched — {failed_list}"
-    else:
-        fail_note = ""
 
-    if fail_note:
-        await error_channel.send(fail_note.strip())
+    if failed_labels:
+        now_cest = datetime.utcnow() + timedelta(hours=2)
+        embed = discord.Embed(
+            title="⚠️ Mimir – fetch errors",
+            color=discord.Color.orange(),
+            timestamp=datetime.utcnow(),
+        )
+        embed.add_field(
+            name="Time (CEST)",
+            value=now_cest.strftime("%Y-%m-%d %H:%M"),
+            inline=True,
+        )
+        embed.add_field(
+            name="Coverage",
+            value=f"`{checked_count}/{total_metrics}` metrics checked",
+            inline=True,
+        )
+        # Group errors by type for cleaner presentation
+        by_error: dict[str, list[str]] = {}
+        for lbl, err in failed_labels:
+            by_error.setdefault(err, []).append(lbl)
+        lines = []
+        for err_type, labels in by_error.items():
+            lines.append(f"**{err_type}**: {', '.join(f'`{l}`' for l in labels)}")
+        embed.add_field(
+            name=f"Failed metrics ({failed_count})",
+            value="\n".join(lines),
+            inline=False,
+        )
+        embed.set_footer(text="Mimir — Error Monitor")
+        await error_channel.send(embed=embed)
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
