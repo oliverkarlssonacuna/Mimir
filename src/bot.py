@@ -387,9 +387,12 @@ async def monitor_loop():
     else:
         fail_note = ""
 
+    if fail_note:
+        await channel.send(fail_note.strip())
+
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.{fail_note}")
+        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -402,13 +405,10 @@ async def monitor_loop():
 
     if not new_anomalies:
         logger.info("Monitor: anomalies exist but already alerted today.")
-        if fail_note:
-            await channel.send(fail_note.strip())
+        await channel.send(f"✅ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
         return
 
     grouped = _group_anomalies(new_anomalies)
-    if fail_note:
-        await channel.send(fail_note.strip())
     for metric_anomalies in grouped.values():
         try:
             await send_grouped_anomaly_alert(channel, metric_anomalies)
