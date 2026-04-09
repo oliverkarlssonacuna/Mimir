@@ -80,7 +80,7 @@ class SteepClient:
                 resp = self.session.post(
                     f"{BASE_URL}/v1/metrics/{metric_id}/query",
                     json=body,
-                    timeout=30,
+                    timeout=10,
                 )
             except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError) as e:
                 wait = 2 ** attempt

@@ -365,6 +365,9 @@ async def monitor_loop():
         logger.error("Alert channel %s not found", alert_channel_id)
         return
 
+    error_channel_id = Config.DISCORD_ERROR_CHANNEL_ID
+    error_channel = bot.get_channel(int(error_channel_id)) if error_channel_id else channel
+
     total_metrics = len(detector._metric_configs)
     loop = asyncio.get_running_loop()
 
@@ -376,7 +379,7 @@ async def monitor_loop():
         )
     except Exception as e:
         logger.error("Monitor check failed: %s", e, exc_info=True)
-        await channel.send(f"❌ Monitor check failed: {e}")
+        await error_channel.send(f"❌ Monitor check failed: {e}")
         return
 
     failed_count = len(failed_labels)
@@ -388,7 +391,7 @@ async def monitor_loop():
         fail_note = ""
 
     if fail_note:
-        await channel.send(fail_note.strip())
+        await error_channel.send(fail_note.strip())
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
