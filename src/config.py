@@ -33,14 +33,18 @@ class Config:
     BQ_SNAPSHOT_TABLE: str = (
         "lia-project-sandbox-deletable.anomaly_checks_demo.steep_metric_snapshots"
     )
-    # BQ config table for metric alert rules
+    # BQ config table for Steep metric alert rules
     BQ_METRIC_CONFIGS_TABLE: str = (
-        "lia-project-sandbox-deletable.anomaly_checks_demo.metric_configs"
+        "lia-project-sandbox-deletable.anomaly_checks_demo.steep_metrics_configs"
+    )
+    # BQ config table for BQ-sourced metrics (tables/queries)
+    BQ_METRICS_CONFIGS_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.bq_metrics_configs"
     )
     MAX_QUERY_ROWS: int = 200
 
     # Monitor interval – 4 hours (matches Steep cache TTL)
-    MONITOR_INTERVAL_SECONDS: int = int(_optional("MONITOR_INTERVAL_SECONDS", "14400"))
+    MONITOR_INTERVAL_SECONDS: int = int(_optional("MONITOR_INTERVAL_SECONDS", "3600"))
 
     # Jira integration for release context
     JIRA_BASE_URL: str = _optional("JIRA_BASE_URL", "")
@@ -53,6 +57,15 @@ class Config:
 
     # Beta launch date – data before this is unreliable
     BASELINE_START_DATE: str = "2026-03-09"
+
+    # High-level game milestones — injected into every deep analysis prompt
+    GAME_MILESTONES: str = (
+        "Pre-Alpha (JOGO): DreamHack demo Nov 2022; FFA playtests Feb 2023; v0.6.0-alpha released May 2023.\n"
+        "Alpha test: December 2025.\n"
+        "Closed Beta: 9 March 2026 – 30 March 2026.\n"
+        "v0.64.0 internal release: 9 April 2026.\n"
+        "Official launch (v1.00): planned 7 May 2026."
+    )
 
     # Admin web UI URL (used in /admin Discord command)
     ADMIN_URL: str = _optional("ADMIN_URL", "http://localhost:8080")

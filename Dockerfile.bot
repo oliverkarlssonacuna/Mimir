@@ -6,18 +6,17 @@ COPY pyproject.toml .
 COPY src/ ./src/
 
 RUN pip install --no-cache-dir \
-    "discord.py>=2.4.0" \
+    "discord.py>=2.0" \
+    aiohttp \
     google-cloud-bigquery \
-    google-genai \
+    "google-genai" \
     python-dotenv \
-    matplotlib \
-    tabulate \
     requests \
-    aiohttp
+    matplotlib
 
-# Pre-build matplotlib font cache so it doesn't block at runtime (~60s otherwise)
-RUN python -c "import matplotlib.font_manager; matplotlib.font_manager.findfont('DejaVu Sans')"
+# Pre-warm matplotlib font cache so first chart render is fast
+RUN python3 -c "import matplotlib; matplotlib.use('Agg'); import matplotlib.pyplot as plt; fig, ax = plt.subplots(); fig.savefig('/dev/null', format='png'); plt.close()"
 
 ENV PYTHONPATH=/app/src
 
-CMD ["python", "src/bot.py"]
+CMD ["python3", "src/bot.py"]

@@ -2,8 +2,9 @@ name: Deploy Web to Cloud Run
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
+      - "web/**"
       - "src/**"
       - "templates/**"
       - "static/**"

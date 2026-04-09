@@ -2,7 +2,7 @@ name: Deploy Bot to Cloud Run
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - "src/**"
       - "Dockerfile.bot"
@@ -61,14 +61,12 @@ jobs:
             --min-instances=1 \
             --max-instances=1 \
             --set-secrets="DISCORD_BOT_TOKEN=mimir-discord-bot-token:latest,DISCORD_ALERT_CHANNEL_ID=mimir-discord-alert-channel-id:latest,STEEP_API_TOKEN=mimir-steep-api-token:latest" \
-            --set-env-vars="GCP_PROJECT_ID=${{ env.PROJECT_ID }},ADMIN_URL=https://mimir-web-xhk35fyqfq-ez.a.run.app,BOT_INTERNAL_PORT=8081,GCP_VERTEXAI_REGION=us-central1,DISCORD_ERROR_CHANNEL_ID=1491792530944163940" # gemini-2.0-flash-001 only available in us-central1
+            --set-env-vars="GCP_PROJECT_ID=${{ env.PROJECT_ID }},ADMIN_URL=https://mimir-web-xhk35fyqfq-ez.a.run.app,BOT_INTERNAL_PORT=8081,GCP_VERTEXAI_REGION=us-central1"
 
       - name: Print service URL
-        id: url
         run: |
           URL=$(gcloud run services describe ${{ env.SERVICE }} \
             --project=${{ env.PROJECT_ID }} \
             --region=${{ env.REGION }} \
             --format="value(status.url)")
           echo "Deployed to: $URL"
-          echo "url=$URL" >> $GITHUB_OUTPUT

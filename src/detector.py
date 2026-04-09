@@ -4,7 +4,7 @@ import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from bq_client import BQClient
 from config import Config, THRESHOLDS
@@ -37,64 +37,50 @@ class Detector:
         self._metric_configs: list[dict] = []
         self.reload_configs()
 
-    def reload_configs(self) -> None:
+    def reload_configs(self, *, enabled_only: bool = True, collect_data_only: bool = False) -> None:
         """Load metric configs from BQ into memory cache."""
-        self._metric_configs = self.bq.load_metric_configs(Config.BQ_METRIC_CONFIGS_TABLE)
+        self._metric_configs = self.bq.load_metric_configs(
+            Config.BQ_METRIC_CONFIGS_TABLE,
+            enabled_only=enabled_only,
+            collect_data_only=collect_data_only,
+        )
         logger.info("Loaded %d metric configs from BQ.", len(self._metric_configs))
+        self._bq_metric_configs = self._load_bq_metric_configs(
+            enabled_only=enabled_only, collect_data_only=collect_data_only
+        )
+        logger.info("Loaded %d BQ metric configs.", len(self._bq_metric_configs))
 
-    def _preload_snapshot_cache(self, from_date_str: str) -> dict[str, dict[str, dict[int, float]]]:
-        """Bulk-load all BQ snapshots since from_date_str into an in-memory cache.
-
-        Returns {metric_id: {date_str: {hour: cumulative_value}}}
-        keeping the latest captured_at value per (metric_id, date, hour).
-        Called once per collect_and_check to replace ~100 individual BQ queries.
-        """
-        sql = f"""
-            SELECT metric_id, snapshot_date, snapshot_hour, cumulative_value
-            FROM (
-              SELECT metric_id, snapshot_date, snapshot_hour, cumulative_value,
-                     ROW_NUMBER() OVER (
-                       PARTITION BY metric_id, snapshot_date, snapshot_hour
-                       ORDER BY captured_at DESC
-                     ) AS rn
-              FROM `{Config.BQ_SNAPSHOT_TABLE}`
-              WHERE snapshot_date >= '{from_date_str}'
-            )
-            WHERE rn = 1
-        """
-        rows = self.bq.run_query(sql, max_rows=20000)
-        cache: dict[str, dict[str, dict[int, float]]] = {}
-        for row in rows:
-            mid = row["metric_id"]
-            d = str(row["snapshot_date"])[:10]
-            h = int(row["snapshot_hour"])
-            v = row["cumulative_value"]
-            if v is not None:
-                cache.setdefault(mid, {}).setdefault(d, {})[h] = float(v)
-        return cache
+    def _load_bq_metric_configs(self, enabled_only: bool = True, collect_data_only: bool = False) -> list[dict]:
+        """Load BQ metric configs (those with a sql_query)."""
+        try:
+            conditions = ["sql_query IS NOT NULL", "sql_query != ''"]
+            if enabled_only:
+                conditions.append("enabled = TRUE")
+            if collect_data_only:
+                conditions.append("collect_data = TRUE")
+            where = "WHERE " + " AND ".join(conditions)
+            sql = f"SELECT * FROM `{Config.BQ_METRICS_CONFIGS_TABLE}` {where}"
+            return self.bq.run_query(sql)
+        except Exception as e:
+            logger.warning("Could not load BQ metric configs: %s", e)
+            return []
 
     # ── Main entry point ──────────────────────────────────────────────────    
 
-    def collect_and_check(self, progress_callback=None) -> tuple[list[Anomaly], int]:
+    def collect_and_check(self, progress_callback=None) -> list[Anomaly]:
         """Collect snapshots from Steep, save to BQ, run comparisons.
 
-        Returns (anomalies, failed_count) where failed_count is the number of metrics
-        that could not be fetched from Steep.
+        Returns a list of Anomaly objects (empty if all is well).
         progress_callback: optional callable(current, total, label) called after each metric.
         """
         now = datetime.now(timezone.utc)
         current_hour = now.hour
         today_str = now.strftime("%Y-%m-%d")
 
-        # Pre-load all BQ snapshots (last 9 days) in one query – replaces ~100 per-metric BQ calls
-        _bq_cache = self._preload_snapshot_cache((now - timedelta(days=9)).strftime("%Y-%m-%d"))
-        logger.info("BQ snapshot cache loaded: %d metrics.", len(_bq_cache))
-
         anomalies: list[Anomaly] = []
         total = len(self._metric_configs)
         _lock = threading.Lock()
         _counter = [0]
-        _failed_labels: list[tuple[str, str]] = []  # (label, error_message)
 
         def _process_one(metric: dict) -> list[Anomaly]:
             metric_id = metric["metric_id"]
@@ -105,10 +91,9 @@ class Detector:
             try:
                 value, refreshed_at, historical = self._fetch_values(metric_id)
             except Exception as e:
-                logger.error("Failed to fetch %s from Steep: %s", label, e, exc_info=True)
+                logger.error("Failed to fetch %s from Steep: %s", label, e)
                 with _lock:
                     _counter[0] += 1
-                    _failed_labels.append((label, type(e).__name__))
                     if progress_callback:
                         progress_callback(_counter[0], total, label)
                 return result
@@ -121,7 +106,7 @@ class Detector:
                         progress_callback(_counter[0], total, label)
                 return result
 
-            if not self._already_captured(metric_id, today_str, value, bq_cache=_bq_cache):
+            if not self._already_captured(metric_id, today_str, value):
                 self._save_snapshot(metric_id, label, today_str, current_hour, value, refreshed_at)
             else:
                 logger.info("%s: data unchanged (same value), skipping save.", label)
@@ -132,7 +117,7 @@ class Detector:
             }
             display_format = metric.get("display_format") or "number"
             result.extend(
-                self._check_metric(metric_id, label, direction, today_str, current_hour, value, metric_thresholds, historical, display_format, bq_cache=_bq_cache)
+                self._check_metric(metric_id, label, direction, today_str, current_hour, value, metric_thresholds, historical, display_format)
             )
 
             with _lock:
@@ -142,22 +127,259 @@ class Detector:
 
             return result
 
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            futures = [executor.submit(_process_one, m) for m in self._metric_configs]
-            for future in as_completed(futures):
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            steep_futures = [executor.submit(_process_one, m) for m in self._metric_configs]
+            bq_future = executor.submit(self.check_bq_metrics)
+
+            for future in as_completed(steep_futures):
                 try:
                     anomalies.extend(future.result())
                 except Exception as e:
-                    logger.error("Unhandled error in metric worker: %s", e, exc_info=True)
+                    logger.error("Unhandled error in metric worker: %s", e)
 
-        if _failed_labels:
-            logger.warning(
-                "Steep fetch: %d/%d metrics failed: %s",
-                len(_failed_labels),
-                total,
-                ", ".join(f"{lbl} ({err})" for lbl, err in _failed_labels),
+            try:
+                anomalies.extend(bq_future.result())
+            except Exception as e:
+                logger.error("BQ metric check failed: %s", e)
+
+        return anomalies
+
+    def check_only(self, progress_callback=None) -> list[Anomaly]:
+        """Run anomaly checks using only BQ snapshot data — no Steep API calls.
+
+        Fetches all snapshot data in 2 batch queries, then compares in memory.
+        Used by the monitor loop; snapshot collection is handled by the snapshot job.
+        """
+        from datetime import timedelta
+        from google.cloud import bigquery as _bq
+
+        now = datetime.now(timezone.utc)
+        current_hour = now.hour
+        today_str = now.strftime("%Y-%m-%d")
+        from_date = (now.date() - timedelta(days=9)).isoformat()
+
+        metric_ids = [m["metric_id"] for m in self._metric_configs]
+        if not metric_ids:
+            return []
+
+        id_list = ", ".join(f"'{mid}'" for mid in metric_ids)
+
+        # ── Batch query 1: today's current snapshot per metric ──────────────
+        sql_today = (
+            f"SELECT metric_id, cumulative_value, snapshot_hour "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            f"WHERE metric_id IN ({id_list}) "
+            f"AND snapshot_date = '{today_str}' "
+            f"AND snapshot_hour <= {current_hour} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY metric_id ORDER BY snapshot_hour DESC, captured_at DESC) = 1"
+        )
+
+        # ── Batch query 2: last 9 days final values per metric ───────────────
+        sql_history = (
+            f"SELECT metric_id, snapshot_date, MAX(cumulative_value) as value "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            f"WHERE metric_id IN ({id_list}) "
+            f"AND snapshot_date >= '{from_date}' "
+            f"AND snapshot_date < '{today_str}' "
+            f"GROUP BY metric_id, snapshot_date"
+        )
+
+        # ── Batch query 3: last week same hour (pace) per metric ─────────────
+        last_week_str = (now.date() - timedelta(days=7)).isoformat()
+        sql_pace = (
+            f"SELECT metric_id, cumulative_value "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            f"WHERE metric_id IN ({id_list}) "
+            f"AND snapshot_date = '{last_week_str}' "
+            f"AND snapshot_hour = {current_hour} "
+            f"QUALIFY ROW_NUMBER() OVER (PARTITION BY metric_id ORDER BY captured_at DESC) = 1"
+        )
+
+        try:
+            today_rows = self.bq.run_query(sql_today)
+            history_rows = self.bq.run_query(sql_history)
+            pace_rows = self.bq.run_query(sql_pace)
+        except Exception as e:
+            logger.error("check_only batch query failed: %s", e)
+            return []
+
+        # Build lookup dicts
+        today_values: dict[str, float] = {r["metric_id"]: r["cumulative_value"] for r in today_rows}
+        pace_values: dict[str, float] = {r["metric_id"]: r["cumulative_value"] for r in pace_rows}
+        # historical[metric_id][date_str] = value
+        historical: dict[str, dict[str, float]] = {}
+        for r in history_rows:
+            mid = r["metric_id"]
+            historical.setdefault(mid, {})[str(r["snapshot_date"])] = r["value"]
+
+        # ── Fallback: metrics missing today's snapshot ───────────────────────
+        missing_ids = [m["metric_id"] for m in self._metric_configs if m["metric_id"] not in today_values]
+        if missing_ids:
+            # Find latest snapshot date per missing metric
+            missing_list = ", ".join(f"'{mid}'" for mid in missing_ids)
+            sql_latest = (
+                f"SELECT metric_id, MAX(snapshot_date) as latest_date "
+                f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+                f"WHERE metric_id IN ({missing_list}) "
+                f"GROUP BY metric_id"
             )
-        return anomalies, _failed_labels
+            try:
+                latest_rows = self.bq.run_query(sql_latest)
+                latest_dates = {r["metric_id"]: r["latest_date"] for r in latest_rows}
+            except Exception as e:
+                logger.warning("check_only fallback query failed: %s", e)
+                latest_dates = {}
+
+            stale_threshold_hours = 5
+            for mid in missing_ids:
+                latest = latest_dates.get(mid)
+                # Calculate hours since latest snapshot
+                if latest is not None:
+                    if isinstance(latest, str):
+                        latest = datetime.strptime(latest, "%Y-%m-%d").date()
+                    latest_dt = datetime.combine(latest, datetime.min.time()).replace(tzinfo=timezone.utc)
+                    hours_old = (now - latest_dt).total_seconds() / 3600
+                else:
+                    hours_old = 999  # no snapshot ever → always fetch
+
+                if hours_old > stale_threshold_hours:
+                    # Steep hasn't updated in >5h — fetch directly
+                    label = next((m["metric_label"] for m in self._metric_configs if m["metric_id"] == mid), mid)
+                    logger.info("%s: no snapshot for %dh, falling back to Steep API.", label, int(hours_old))
+                    try:
+                        value, refreshed_at, hist = self._fetch_values(mid)
+                        if value is not None:
+                            today_values[mid] = value
+                            # Merge fetched history into our historical dict
+                            for date_str, v in hist.items():
+                                if date_str != today_str:
+                                    historical.setdefault(mid, {})[date_str] = v
+                            # Save snapshot so we don't fetch again next hour
+                            if not self._already_captured(mid, today_str, value):
+                                self._save_snapshot(mid, label, today_str, current_hour, value, refreshed_at)
+                    except Exception as e:
+                        logger.warning("%s: Steep fallback failed: %s", label, e)
+                else:
+                    # Latest snapshot is fresh enough — use it
+                    label = next((m["metric_label"] for m in self._metric_configs if m["metric_id"] == mid), mid)
+                    logger.info("%s: using latest BQ snapshot from %s (%.1fh old).", label, latest, hours_old)
+                    sql_use_latest = (
+                        f"SELECT cumulative_value FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+                        f"WHERE metric_id = '{mid}' AND snapshot_date = '{latest}' "
+                        f"ORDER BY snapshot_hour DESC LIMIT 1"
+                    )
+                    try:
+                        rows = self.bq.run_query(sql_use_latest)
+                        if rows:
+                            today_values[mid] = rows[0]["cumulative_value"]
+                    except Exception as e:
+                        logger.warning("%s: latest snapshot fetch failed: %s", label, e)
+
+        anomalies: list[Anomaly] = []
+        total = len(self._metric_configs)
+
+        for i, metric in enumerate(self._metric_configs):
+            metric_id = metric["metric_id"]
+            label = metric["metric_label"]
+            direction = metric.get("direction", "down_is_bad")
+            display_format = metric.get("display_format") or "number"
+
+            current_value = today_values.get(metric_id)
+            if current_value is None:
+                logger.info("%s: no BQ snapshot for today, skipping.", label)
+                if progress_callback:
+                    progress_callback(i + 1, total, label)
+                continue
+
+            metric_hist = historical.get(metric_id, {})
+            metric_thresholds = {
+                comp: float(metric.get(f"{comp}_threshold", THRESHOLDS[comp]))
+                for comp in ("pace", "dod", "wow")
+            }
+
+            # Run comparisons in memory — override pace baseline with batch value
+            result = self._check_metric_from_cache(
+                metric_id, label, direction, today_str, current_hour,
+                current_value, metric_thresholds, metric_hist,
+                pace_baseline=pace_values.get(metric_id),
+                display_format=display_format,
+            )
+            anomalies.extend(result)
+
+            if progress_callback:
+                progress_callback(i + 1, total, label)
+
+        # BQ metrics (SQL-based) still run as before
+        try:
+            anomalies.extend(self.check_bq_metrics())
+        except Exception as e:
+            logger.error("BQ metric check failed: %s", e)
+
+        return anomalies
+
+    def _check_metric_from_cache(
+        self,
+        metric_id: str, label: str, direction: str,
+        today_str: str, current_hour: int, current_value: float,
+        metric_thresholds: dict,
+        historical: dict[str, float],
+        pace_baseline: float | None,
+        display_format: str = "number",
+    ) -> list[Anomaly]:
+        """Like _check_metric but uses pre-fetched pace_baseline instead of BQ query."""
+        from datetime import timedelta
+        today = datetime.strptime(today_str, "%Y-%m-%d").date()
+        yesterday = today - timedelta(days=1)
+        day_before = today - timedelta(days=2)
+        same_weekday_last_week = today - timedelta(days=7)
+
+        anomalies: list[Anomaly] = []
+
+        # Pace check — use pre-fetched baseline
+        if pace_baseline is not None and pace_baseline != 0:
+            anomaly = self._evaluate(
+                metric_id, label, direction, "pace",
+                current_value, pace_baseline,
+                metric_thresholds["pace"],
+                reference_date=today_str,
+                display_format=display_format,
+                baseline_date=same_weekday_last_week.isoformat(),
+            )
+            if anomaly:
+                anomalies.append(anomaly)
+
+        # DoD check
+        yesterday_val = historical.get(yesterday.isoformat())
+        day_before_val = historical.get(day_before.isoformat())
+        if yesterday_val is not None and day_before_val is not None and day_before_val != 0:
+            anomaly = self._evaluate(
+                metric_id, label, direction, "dod",
+                yesterday_val, day_before_val,
+                metric_thresholds["dod"],
+                reference_date=yesterday.isoformat(),
+                display_format=display_format,
+                baseline_date=day_before.isoformat(),
+            )
+            if anomaly:
+                anomalies.append(anomaly)
+
+        # WoW check
+        baseline_start = datetime.strptime(Config.BASELINE_START_DATE, "%Y-%m-%d").date()
+        last_week_val = historical.get(same_weekday_last_week.isoformat())
+        if (same_weekday_last_week > baseline_start
+                and yesterday_val is not None and last_week_val is not None and last_week_val != 0):
+            anomaly = self._evaluate(
+                metric_id, label, direction, "wow",
+                yesterday_val, last_week_val,
+                metric_thresholds["wow"],
+                reference_date=yesterday.isoformat(),
+                display_format=display_format,
+                baseline_date=same_weekday_last_week.isoformat(),
+            )
+            if anomaly:
+                anomalies.append(anomaly)
+
+        return anomalies
 
     # ── Fetch from Steep ──────────────────────────────────────────────────
 
@@ -167,6 +389,7 @@ class Detector:
         Returns (today_value, refreshed_at, historical) where historical is
         a dict of {date_str: value} for all returned data points.
         """
+        from datetime import timedelta
         now = datetime.now(timezone.utc)
         today_str = now.strftime("%Y-%m-%d")
         from_date = (now - timedelta(days=8)).strftime("%Y-%m-%dT00:00:00Z")
@@ -206,16 +429,12 @@ class Detector:
 
     # ── BQ snapshot operations ────────────────────────────────────────────
 
-    def _already_captured(self, metric_id: str, date_str: str, value: float,
-                           bq_cache: dict | None = None) -> bool:
+    def _already_captured(self, metric_id: str, date_str: str, value: float) -> bool:
         """Check if we already have a snapshot with the same cumulative_value for this metric and date.
 
         Only saves a new snapshot when the metric value has actually changed.
         snapshot_hour reflects when Steep updated its data.
         """
-        if bq_cache is not None:
-            date_snapshots = bq_cache.get(metric_id, {}).get(date_str, {})
-            return any(abs(v - value) < 1e-9 for v in date_snapshots.values())
         sql = (
             f"SELECT 1 FROM `{Config.BQ_SNAPSHOT_TABLE}` "
             "WHERE metric_id = @metric_id "
@@ -259,25 +478,12 @@ class Detector:
         except Exception as e:
             logger.error("Failed to save snapshot for %s: %s", label, e)
 
-    def _get_nearest_snapshot(self, metric_id: str, date_str: str, max_hour: int,
-                               strict: bool = False,
-                               bq_cache: dict | None = None) -> float | None:
+    def _get_nearest_snapshot(self, metric_id: str, date_str: str, max_hour: int, strict: bool = False) -> float | None:
         """Get the snapshot for a date at exactly max_hour (strict=True) or at or before max_hour (strict=False).
 
         If strict=True, only returns a snapshot at exactly max_hour – ensures apples-to-apples
         pace comparison (same hour yesterday vs same hour today).
         """
-        if bq_cache is not None:
-            hours = bq_cache.get(metric_id, {}).get(date_str, {})
-            if not hours:
-                return None
-            if strict:
-                return hours.get(max_hour)
-            candidates = [(h, v) for h, v in hours.items() if h <= max_hour]
-            if candidates:
-                return max(candidates, key=lambda x: x[0])[1]
-            # Fallback: closest available hour
-            return min(hours.items(), key=lambda x: abs(x[0] - max_hour))[1]
         from google.cloud import bigquery as _bq
         if strict:
             sql = (
@@ -345,13 +551,14 @@ class Detector:
         metric_thresholds: dict,
         historical: dict[str, float] | None = None,
         display_format: str = "number",
-        bq_cache: dict | None = None,
     ) -> list[Anomaly]:
         """Run pace, DoD, and WoW checks for one metric.
 
         Pace uses BQ snapshots: today at current hour vs same weekday last week at same hour.
         DoD and WoW uses Steep historical data direkt (alltid korrekt slutvärde).
         """
+        from datetime import timedelta
+
         today = datetime.strptime(today_str, "%Y-%m-%d").date()
         yesterday = today - timedelta(days=1)
         day_before = today - timedelta(days=2)
@@ -361,7 +568,7 @@ class Detector:
         anomalies: list[Anomaly] = []
 
         # Pace check: today vs same weekday last week at same hour (BQ snapshots)
-        last_week_same_hour = self._get_nearest_snapshot(metric_id, same_weekday_last_week.isoformat(), current_hour, strict=True, bq_cache=bq_cache)
+        last_week_same_hour = self._get_nearest_snapshot(metric_id, same_weekday_last_week.isoformat(), current_hour, strict=True)
         if last_week_same_hour is not None and last_week_same_hour != 0:
             anomaly = self._evaluate(
                 metric_id, label, direction, "pace",
@@ -462,3 +669,113 @@ class Detector:
             baseline_date=baseline_date,
             display_format=display_format,
         )
+
+    # ── BQ metric checking ────────────────────────────────────────────────
+
+    def check_bq_metrics(self, progress_callback=None) -> list["Anomaly"]:
+        """Fetch and check all enabled BQ metrics. Returns anomalies."""
+        configs = getattr(self, "_bq_metric_configs", [])
+        if not configs:
+            return []
+
+        anomalies: list[Anomaly] = []
+        total = len(configs)
+        _lock = threading.Lock()
+        _counter = [0]
+
+        def _process_one(metric: dict) -> list[Anomaly]:
+            metric_id = metric["metric_id"]
+            label = metric["metric_label"]
+            direction = metric.get("direction", "alert_on_drop")
+            display_format = metric.get("display_format") or "number"
+            sql_query = metric.get("sql_query", "")
+            result: list[Anomaly] = []
+
+            try:
+                rows = self.bq.run_query(sql_query)
+            except Exception as e:
+                logger.error("BQ metric query failed for %s: %s", label, e)
+                with _lock:
+                    _counter[0] += 1
+                    if progress_callback:
+                        progress_callback(_counter[0], total, label)
+                return result
+
+            # Build date → value dict from query results
+            historical: dict[str, float] = {}
+            for row in rows:
+                date_val = row.get("date")
+                value = row.get("value")
+                if date_val is not None and value is not None:
+                    date_str = date_val if isinstance(date_val, str) else str(date_val)
+                    historical[date_str] = float(value)
+
+            if not historical:
+                logger.warning("No data returned for BQ metric %s", label)
+                with _lock:
+                    _counter[0] += 1
+                    if progress_callback:
+                        progress_callback(_counter[0], total, label)
+                return result
+
+            metric_thresholds = {
+                comp: float(metric.get(f"{comp}_threshold", THRESHOLDS[comp]))
+                for comp in ("pace", "dod", "wow")
+            }
+
+            from datetime import timezone, timedelta
+            now = datetime.now(timezone.utc)
+            today_str = now.strftime("%Y-%m-%d")
+
+            # BQ metrics have no intraday snapshots — skip pace, run DoD + WoW only
+            today = datetime.strptime(today_str, "%Y-%m-%d").date()
+            yesterday = today - timedelta(days=1)
+            day_before = today - timedelta(days=2)
+            same_weekday_last_week = today - timedelta(days=7)
+            baseline_start = datetime.strptime(Config.BASELINE_START_DATE, "%Y-%m-%d").date()
+
+            yesterday_val = historical.get(yesterday.isoformat())
+            day_before_val = historical.get(day_before.isoformat())
+            last_week_val = historical.get(same_weekday_last_week.isoformat())
+
+            if yesterday_val is not None and day_before_val is not None and day_before_val != 0:
+                anomaly = self._evaluate(
+                    metric_id, label, direction, "dod",
+                    yesterday_val, day_before_val,
+                    metric_thresholds["dod"],
+                    reference_date=yesterday.isoformat(),
+                    display_format=display_format,
+                    baseline_date=day_before.isoformat(),
+                )
+                if anomaly:
+                    result.append(anomaly)
+
+            if (same_weekday_last_week > baseline_start
+                    and yesterday_val is not None and last_week_val is not None and last_week_val != 0):
+                anomaly = self._evaluate(
+                    metric_id, label, direction, "wow",
+                    yesterday_val, last_week_val,
+                    metric_thresholds["wow"],
+                    reference_date=yesterday.isoformat(),
+                    display_format=display_format,
+                    baseline_date=same_weekday_last_week.isoformat(),
+                )
+                if anomaly:
+                    result.append(anomaly)
+
+            with _lock:
+                _counter[0] += 1
+                if progress_callback:
+                    progress_callback(_counter[0], total, label)
+
+            return result
+
+        with ThreadPoolExecutor(max_workers=8) as executor:
+            futures = [executor.submit(_process_one, m) for m in configs]
+            for future in as_completed(futures):
+                try:
+                    anomalies.extend(future.result())
+                except Exception as e:
+                    logger.error("Unhandled error in BQ metric worker: %s", e)
+
+        return anomalies

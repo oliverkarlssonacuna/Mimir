@@ -1,8 +1,7 @@
-"""
-Discord bot – Steep metric anomaly monitoring.
+"""Discord bot – Steep metric anomaly monitoring.
 
-Polls Steep every 4 hours, saves snapshots to BQ,
-detects anomalies, and sends alerts to Discord.
+Monitor loop runs every hour using BQ snapshots (no Steep API calls).
+Steep API is used only for /status manual checks and deep analysis threads.
 
 Commands:
   /status   – run a manual check and show all metrics
@@ -172,21 +171,14 @@ async def status(interaction: discord.Interaction):
             )
 
     try:
-        anomalies, failed_labels = await loop.run_in_executor(
+        anomalies = await loop.run_in_executor(
             None, lambda: detector.collect_and_check(progress_callback=on_progress)
         )
     except Exception as e:
         await progress_msg.edit(content=f"❌ Error during check: {e}")
         return
 
-    failed_count = len(failed_labels)
-    checked_count = total_metrics - failed_count
-    if failed_labels:
-        failed_list = ", ".join(f"`{lbl}` ({err})" for lbl, err in failed_labels)
-        fail_note = f" ⚠️ {failed_count} metric(s) could not be fetched: {failed_list}"
-    else:
-        fail_note = ""
-    await progress_msg.edit(content=f"✅ Done — checked `{checked_count}/{total_metrics}` metrics.{fail_note}")
+    await progress_msg.edit(content=f"✅ Done — checked `{total_metrics}` metrics.")
 
     if not anomalies:
         embed = discord.Embed(
@@ -233,6 +225,38 @@ async def admin_link(interaction: discord.Interaction):
         emoji="⚙️",
     ))
     await interaction.response.send_message("🔧 Mimir admin panel:", view=view, ephemeral=True)
+
+
+# ── /notes command group ──────────────────────────────────────────────────────
+notes_group = app_commands.Group(name="notes", description="Manage context notes for deep analysis (release dates, events, etc.)")
+
+@notes_group.command(name="add", description="Add a context note — e.g. 'Apr 7: Closed Android beta'")
+@app_commands.describe(text="The note to add")
+async def notes_add(interaction: discord.Interaction, text: str):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, lambda: bq.add_note(text, interaction.user.display_name))
+    await interaction.followup.send(f"✅ Note added: *{text}*", ephemeral=True)
+
+@notes_group.command(name="view", description="View all current context notes")
+async def notes_view(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    loop = asyncio.get_running_loop()
+    rows = await loop.run_in_executor(None, bq.get_notes)
+    if not rows:
+        await interaction.followup.send("📋 No context notes yet. Use `/notes add` to add one.", ephemeral=True)
+        return
+    lines = [f"• `{r['created_at'][:10]}` **{r['added_by'] or 'unknown'}**: {r['note']}" for r in rows]
+    await interaction.followup.send("📋 **Context notes:**\n" + "\n".join(lines), ephemeral=True)
+
+@notes_group.command(name="clear", description="Clear all context notes")
+async def notes_clear(interaction: discord.Interaction):
+    await interaction.response.defer(ephemeral=True, thinking=True)
+    loop = asyncio.get_running_loop()
+    deleted = await loop.run_in_executor(None, bq.clear_notes)
+    await interaction.followup.send(f"🗑️ Cleared {deleted} note(s).", ephemeral=True)
+
+tree.add_command(notes_group)
 
 
 def _group_anomalies(anomalies: list[Anomaly]) -> dict[str, list[Anomaly]]:
@@ -354,7 +378,7 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
 
 @tasks.loop(seconds=Config.MONITOR_INTERVAL_SECONDS)
 async def monitor_loop():
-    """Background task – polls Steep, saves snapshots, checks for anomalies."""
+    """Background task – checks BQ snapshots for anomalies every hour."""
     alert_channel_id = Config.DISCORD_ALERT_CHANNEL_ID
     if not alert_channel_id:
         logger.warning("DISCORD_ALERT_CHANNEL_ID not set – skipping monitor.")
@@ -365,61 +389,37 @@ async def monitor_loop():
         logger.error("Alert channel %s not found", alert_channel_id)
         return
 
-    error_channel_id = Config.DISCORD_ERROR_CHANNEL_ID
-    error_channel = bot.get_channel(int(error_channel_id)) if error_channel_id else channel
-
     total_metrics = len(detector._metric_configs)
+    progress_msg = await channel.send(f"⏳ Checking metrics... `0/{total_metrics}` {'░' * 20}")
+
     loop = asyncio.get_running_loop()
+    last_update = [0]
+
+    def make_bar(current: int, total: int) -> str:
+        filled = int(20 * current / total) if total else 0
+        bar = '█' * filled + '░' * (20 - filled)
+        pct = int(100 * current / total) if total else 0
+        return f"⏳ Checking metrics... `{current}/{total}` `{bar}` {pct}%"
+
+    def on_progress(current: int, total: int, label: str):
+        if current - last_update[0] >= 5 or current == total:
+            last_update[0] = current
+            asyncio.run_coroutine_threadsafe(
+                progress_msg.edit(content=make_bar(current, total)), loop
+            )
 
     try:
-        # No progress callback — avoids flooding asyncio loop with Discord API calls
-        # which would block Discord's heartbeat and cause "Can't keep up" warnings.
-        anomalies, failed_labels = await loop.run_in_executor(
-            None, lambda: detector.collect_and_check()
+        anomalies = await loop.run_in_executor(
+            None, lambda: detector.check_only(progress_callback=on_progress)
         )
     except Exception as e:
-        logger.error("Monitor check failed: %s", e, exc_info=True)
-        await error_channel.send(f"❌ Monitor check failed: {e}")
+        logger.error("Monitor check failed: %s", e)
+        await progress_msg.edit(content=f"❌ Check failed: {e}")
         return
-
-    failed_count = len(failed_labels)
-    checked_count = total_metrics - failed_count
-
-    if failed_labels:
-        now_cest = datetime.utcnow() + timedelta(hours=2)
-        embed = discord.Embed(
-            title="⚠️ Mimir – fetch errors",
-            color=discord.Color.orange(),
-            timestamp=datetime.utcnow(),
-        )
-        embed.add_field(
-            name="Time (CEST)",
-            value=now_cest.strftime("%Y-%m-%d %H:%M"),
-            inline=True,
-        )
-        embed.add_field(
-            name="Coverage",
-            value=f"`{checked_count}/{total_metrics}` metrics checked",
-            inline=True,
-        )
-        # Group errors by type for cleaner presentation
-        by_error: dict[str, list[str]] = {}
-        for lbl, err in failed_labels:
-            by_error.setdefault(err, []).append(lbl)
-        lines = []
-        for err_type, labels in by_error.items():
-            lines.append(f"**{err_type}**: {', '.join(f'`{l}`' for l in labels)}")
-        embed.add_field(
-            name=f"Failed metrics ({failed_count})",
-            value="\n".join(lines),
-            inline=False,
-        )
-        embed.set_footer(text="Mimir — Error Monitor")
-        await error_channel.send(embed=embed)
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
+        await progress_msg.edit(content=f"✅ All clear — checked `{total_metrics}` metrics, no anomalies detected.")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -432,7 +432,6 @@ async def monitor_loop():
 
     if not new_anomalies:
         logger.info("Monitor: anomalies exist but already alerted today.")
-        await channel.send(f"✅ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
         return
 
     grouped = _group_anomalies(new_anomalies)
@@ -593,6 +592,10 @@ async def on_ready():
     synced = await tree.sync()
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
+    # Ensure context notes table exists in BQ
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(None, bq.ensure_notes_table)
+    await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
 
@@ -621,6 +624,9 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
     metric_info = next((m for m in detector._metric_configs if m["metric_id"] == metric_id), None)
 
     if action == "analyse" and metric_info:
+        # Guard against double-acknowledge (e.g. user double-clicked)
+        if interaction.response.is_done():
+            return
         await interaction.response.defer(thinking=True)
 
         # Disable buttons and mark as "analysing" on the original message
@@ -687,43 +693,219 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             }
             _reset_thread_timer(thread.id)
 
-            # Run deep analysis
+            # Pre-fetch data in parallel to reduce Gemini round-trips
             today = datetime.now().strftime("%Y-%m-%d")
             baseline = Config.BASELINE_START_DATE
+            today_date = datetime.strptime(today, "%Y-%m-%d").date()
+            baseline_date_obj = datetime.strptime(baseline, "%Y-%m-%d").date()
+
+            # Determine correct anomaly date for each triggered comparison type
+            from datetime import timedelta as _td
+            triggered_comps = {sa.comparison for sa in saved_anomalies}
+            yesterday_str = (today_date - _td(days=1)).isoformat()
+            # WoW/DoD reference = yesterday (completed day); Pace reference = today
+            chart_anomaly_date = yesterday_str if ("wow" in triggered_comps or "dod" in triggered_comps) else today
+            chart_pace_date = today if "pace" in triggered_comps else ""
+
+            # Only include today's partial data if Pace is triggered (today is the current point)
+            # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
+            chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
+            days_since_baseline = (chart_end_date - baseline_date_obj).days + 2
+
+            from concurrent.futures import ThreadPoolExecutor as _TPE
+            def _fetch_steep():
+                import time as _time
+                from agent import _query_steep_metric
+                last_exc = None
+                for attempt in range(3):
+                    try:
+                        data = _query_steep_metric(steep, metric_id, days=days_since_baseline)
+                        if metric_id in percent_metric_ids:
+                            data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} if "value" in p else p for p in data]
+                        return data
+                    except Exception as e:
+                        last_exc = e
+                        logger.warning("Steep fetch attempt %d failed: %s", attempt + 1, e)
+                        if attempt < 2:
+                            _time.sleep(2 ** attempt)  # 1s, 2s backoff
+                logger.error("Steep fetch failed after 3 attempts: %s", last_exc)
+                return []
+
+            def _fetch_jira():
+                try:
+                    _ref_dt = datetime.strptime(reference_date, "%Y-%m-%d").date()
+                    releases = jira_client.get_releases_near_date(_ref_dt, Config.JIRA_PROJECT_KEY)
+                    return jira_client.format_release_context(releases, _ref_dt) or "No Jira releases found near this date."
+                except Exception as e:
+                    logger.error("Jira lookup failed: %s", e)
+                    return f"Jira lookup failed: {e}"
+
+            def _fetch_notes():
+                try:
+                    rows = bq.get_notes()
+                    return "\n".join(f"- [{r['created_at'][:10]}] {r['note']}" for r in rows) if rows else "None"
+                except Exception as e:
+                    logger.warning("Could not fetch context notes: %s", e)
+                    return "None"
+
+            def _fetch_correlations():
+                try:
+                    corr_baseline = baseline_date or (today_date - _td(days=7)).isoformat()
+                    corr_anomaly  = chart_anomaly_date
+                    # Determine direction from the first saved anomaly's change_pct
+                    direction = 1 if (saved_anomalies and saved_anomalies[0].change_pct >= 0) else -1
+                    # Proportional threshold: correlated metric must move ≥50% of main metric's move,
+                    # with a floor of 30% to avoid noise on modest anomalies
+                    main_pct = abs(saved_anomalies[0].change_pct * 100) if saved_anomalies else 50.0
+                    min_pct = max(30.0, main_pct * 0.5)
+                    rows = bq.get_correlated_metrics(
+                        exclude_metric_id=metric_id,
+                        baseline_date=corr_baseline,
+                        anomaly_date=corr_anomaly,
+                        anomaly_direction=direction,
+                        min_pct=min_pct,
+                        top_n=3,
+                    )
+                    if not rows:
+                        return "None"
+                    lines = []
+                    for r in rows:
+                        pct = r["pct_change"]
+                        arrow = "▲" if pct > 0 else "▼"
+                        lines.append(
+                            f"- {r['metric_label']}: {arrow} {abs(pct):.1f}% "
+                            f"({r['baseline_val']:,.1f} → {r['anomaly_val']:,.1f})"
+                        )
+                    return "\n".join(lines)
+                except Exception as e:
+                    logger.warning("Correlation fetch failed: %s", e)
+                    return "None"
+
+            with _TPE(max_workers=4) as pre_exec:
+                steep_future = pre_exec.submit(_fetch_steep)
+                jira_future = pre_exec.submit(_fetch_jira)
+                notes_future = pre_exec.submit(_fetch_notes)
+                corr_future  = pre_exec.submit(_fetch_correlations)
+                steep_data = steep_future.result()
+                jira_context = jira_future.result()
+                context_notes = notes_future.result()
+                correlated_metrics = corr_future.result()
+
+            import json as _json
+            steep_json = _json.dumps(steep_data)
+
+            # Extract BQ ground-truth dot values from saved_anomalies
+            _chart_anomaly_val = None
+            _chart_baseline_val = None
+            _chart_baseline_val_2 = None
+            _chart_pace_val = None
+            for sa in saved_anomalies:
+                if sa.comparison in ("wow", "dod") and _chart_anomaly_val is None:
+                    _chart_anomaly_val = sa.current_value
+                if sa.comparison == "wow" and _chart_baseline_val is None:
+                    _chart_baseline_val = sa.baseline_value
+                if sa.comparison == "dod" and _chart_baseline_val_2 is None:
+                    _chart_baseline_val_2 = sa.baseline_value
+                if sa.comparison == "pace":
+                    _chart_pace_val = sa.current_value
+
+            # Pre-render chart in thread executor — savefig blocks event loop if run inline
+            from agent import _plot_results
+            import asyncio as _asyncio, functools as _functools
+            chart_path = await _asyncio.get_event_loop().run_in_executor(
+                None,
+                _functools.partial(
+                    _plot_results,
+                    data_json=steep_json,
+                    chart_type="line",
+                    x_col="date",
+                    y_col="value",
+                    title=metric_info["metric_label"],
+                    anomaly_date=chart_anomaly_date,
+                    baseline_date=baseline_date or "",
+                    baseline_date_2=baseline_date_2 or "",
+                    pace_date=chart_pace_date,
+                    anomaly_value=_chart_anomaly_val,
+                    baseline_value=_chart_baseline_val,
+                    baseline_value_2=_chart_baseline_val_2,
+                    pace_value=_chart_pace_val,
+                )
+            )
+            pre_chart = chart_path if not chart_path.startswith("error") else None
+
+            # Single Gemini call — only analysis text, no tool calls
+            # Build ground-truth trigger values from saved_anomalies (these are the
+            # EXACT values that triggered the alert — use these, not Steep API values)
+            trigger_lines = []
+            for sa in saved_anomalies:
+                comp_label = _comparison_label(sa.comparison)
+                if sa.display_format == "percent":
+                    cur_fmt  = f"{sa.current_value * 100:.2f}%"
+                    base_fmt = f"{sa.baseline_value * 100:.2f}%"
+                else:
+                    cur_fmt  = f"{sa.current_value:,.1f}"
+                    base_fmt = f"{sa.baseline_value:,.1f}"
+                trigger_lines.append(
+                    f"- {comp_label}: {base_fmt} → {cur_fmt} ({sa.change_pct:+.1%})"
+                )
+            trigger_values_block = "\n".join(trigger_lines)
+
             prompt = (
-                f"Today's date: {today}\n"
-                f"Do a detailed analysis of the metric {metric_info['metric_label']} (id: {metric_id}).\n"
-                f"Direction: {metric_info['direction']}\n"
-                f"Anomalies detected on {reference_date} via: {triggered_comparisons}\n"
-                f"{anomaly_detail}\n\n"
-                "Steps:\n"
-                f"1. Fetch daily data FROM {baseline} (beta launch) to {reference_date} with query_steep_metric. "
-                f"Do NOT use data before {baseline}. Do NOT include data after {reference_date}.\n"
-                f"2. Draw a line chart with plot_results. Use anomaly_date=\"{reference_date}\" to mark the anomaly. "
-                + (f"Use baseline_date=\"{baseline_date}\" to mark the WoW/Pace baseline (yellow). " if baseline_date else "")
-                + (f"Use baseline_date_2=\"{baseline_date_2}\" to mark the DoD baseline (green)." if baseline_date_2 else "")
-                + "\n"
-                "3. Check for relevant Jira releases with get_jira_releases\n"
-                f"4. Analyse all triggered checks ({triggered_comparisons}) and explain what they collectively indicate. "
-                "Provide possible causes and a recommendation.\n"
+                f"Today's date: {today}\n\n"
+                f"## Metric: {metric_info['metric_label']} (id: {metric_id})\n"
+                f"Direction: {metric_info['direction']}\n\n"
+                f"## TRIGGER VALUES (ground truth — use THESE exact numbers in your analysis, not values from the daily data):\n"
+                f"{trigger_values_block}\n\n"
+                f"## Daily data ({baseline} to {reference_date}) — use for trend/context only:\n"
+                f"{steep_json}\n\n"
+                f"## Game milestones:\n{Config.GAME_MILESTONES}\n\n"
+                f"## Jira releases near {reference_date}:\n{jira_context}\n\n"
+                f"## Team context notes:\n{context_notes}\n\n"
+                f"## Correlated metrics (same direction, same day):\n{correlated_metrics}\n\n"
+                "## Output format\n"
+                "You are analysing a mobile game analytics metric for a Discord channel. "
+                "A chart is already attached — do NOT generate a chart or call any functions.\n\n"
+                "Use this EXACT structure with Discord markdown. Each section is a bold label followed by 1-2 sentences max:\n\n"
+                "**📉 What happened**\n"
+                "<One sentence: metric name, date, exact numbers, % change vs which comparison (WoW/DoD/Pace).>\n\n"
+                "**🔍 Likely cause**\n"
+                "<One sentence: name the most probable cause explicitly — beta end, release, known event, or data pattern. "
+                "Cross-reference milestones, Jira releases, and team notes. No hedging like 'could be many things'.>\n\n"
+                "**🔗 Supporting signals**\n"
+                "<If correlated metrics exist: list them as bullets (• Metric: ▲/▼ X%) and state whether this confirms a systemic or isolated issue. "
+                "If none: write '• No other metrics moved significantly — likely isolated to this metric.'>\n\n"
+                "**📈 Trend**\n"
+                "<One sentence: overall data shape since baseline (e.g. 'Rising through beta, sharp drop after Mar 30 close, now stabilising near zero').>\n\n"
+                "Rules:\n"
+                "- Use real numbers everywhere. No vague statements.\n"
+                "- Reference specific dates (e.g. 'Mar 30 beta close') not just 'recently'.\n"
+                "- If speculating, use 'likely' or 'possibly' — once, not repeatedly.\n"
+                "- Do NOT add a summary or closing sentence. Stop after **📈 Trend**.\n"
+                "- Do NOT say 'investigate further'.\n"
             )
 
             loop = asyncio.get_running_loop()
-            response = await loop.run_in_executor(None, agent.ask, prompt)
+            from concurrent.futures import ThreadPoolExecutor as _TPE2
+            with _TPE2(max_workers=1) as gemini_exec:
+                response = await loop.run_in_executor(gemini_exec, lambda: agent.ask(prompt, tools_enabled=False))
 
-            if response.chart_path:
-                text = response.text or "Here is the analysis:"
+            text = response.text or "Here is the analysis:"
+            # Use pre-rendered chart, fall back to agent chart if pre-render failed
+            final_chart = pre_chart or response.chart_path
+            if final_chart:
                 chunks = split_message(text)
                 await thread.send(
                     content=chunks[0],
-                    file=discord.File(response.chart_path, filename="chart.png"),
+                    file=discord.File(final_chart, filename="chart.png"),
                 )
                 for chunk in chunks[1:]:
                     await thread.send(content=chunk)
-                try:
-                    os.remove(response.chart_path)
-                except OSError:
-                    pass
+                for p in (pre_chart, response.chart_path):
+                    if p:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
             else:
                 for chunk in split_message(response.text):
                     await thread.send(content=chunk)
@@ -732,8 +914,8 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 await thread.send(f"🔗 [View metric in Steep]({steep_url})")
 
         except Exception as e:
-            logger.exception("Analysis thread failed for metric %s", metric_id)
-            await interaction.followup.send(f"❌ Analysis failed: {e}\n\nTry clicking **Deep analysis** again — this is usually a transient error.")
+            logger.error("Analysis thread failed: %s", e)
+            await interaction.followup.send(f"Could not create analysis thread: {e}")
 
     elif action == "handled":
         handled_by = interaction.user.display_name
@@ -768,18 +950,12 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
         )
 
 
-async def _main():
-    await _start_internal_server()
-    async with bot:
-        await bot.start(Config.DISCORD_BOT_TOKEN)
-
-
 def run():
     token = Config.DISCORD_BOT_TOKEN
     if not token:
         logger.error("DISCORD_BOT_TOKEN is not set in .env")
         sys.exit(1)
-    asyncio.run(_main())
+    bot.run(token)
 
 
 if __name__ == "__main__":

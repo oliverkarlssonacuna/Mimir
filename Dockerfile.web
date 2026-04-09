@@ -4,6 +4,7 @@ WORKDIR /app
 
 COPY pyproject.toml .
 COPY src/ ./src/
+COPY web/ ./web/
 COPY templates/ ./templates/
 COPY static/ ./static/
 
@@ -19,6 +20,6 @@ RUN pip install --no-cache-dir \
     python-dotenv \
     requests
 
-ENV PYTHONPATH=/app/src
+ENV PYTHONPATH=/app/src:/app/web
 
 CMD ["uvicorn", "web:app", "--host", "0.0.0.0", "--port", "8080"]
