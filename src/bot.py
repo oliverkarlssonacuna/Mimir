@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 from config import Config, THRESHOLDS
 from bq_client import BQClient
 from steep_client import SteepClient
-from detector import Detector, Anomaly
+from detector import Detector, Anomaly, FieldAlert
 from agent import Agent, THREAD_SYSTEM_PROMPT
 import jira_client
 
@@ -54,6 +54,9 @@ def split_message(text: str, limit: int = 1990) -> list[str]:
 
 # (metric_id, comparison, date_str) already alerted this session
 _alerted_keys: set[tuple[str, str, str]] = set()
+
+# (monitor_id, value, date_str) already alerted this session
+_alerted_field_keys: set[tuple[str, str, str]] = set()
 
 # Thread ID → metric info for follow-up questions
 _thread_metrics: dict[int, dict] = {}
@@ -98,6 +101,29 @@ def _get_error_channel() -> discord.TextChannel | None:
     if channel_id:
         return bot.get_channel(int(channel_id))
     return None
+
+
+def _build_field_alert_embed(fa: FieldAlert) -> discord.Embed:
+    """Build a Discord embed for a field value monitor alert."""
+    from datetime import datetime as _dt, timedelta as _td
+    today = _dt.utcnow().date()
+    window_start = (today - _td(days=7)).strftime("%b %-d")
+    window_end = (today - _td(days=1)).strftime("%b %-d")
+    embed = discord.Embed(
+        title=f"🆕 New field values: {fa.label}",
+        description=(
+            f"Field `{fa.field_name}` has **{len(fa.new_values)} new value(s)** today "
+            f"not seen {window_start}–{window_end}."
+        ),
+        color=discord.Color.orange(),
+        timestamp=_dt.utcnow(),
+    )
+    vals_text = "\n".join(f"• `{v}`" for v in fa.new_values[:25])
+    if len(fa.new_values) > 25:
+        vals_text += f"\n_…and {len(fa.new_values) - 25} more_"
+    embed.add_field(name="New values", value=vals_text, inline=False)
+    embed.set_footer(text="Mimir — Field Value Monitor")
+    return embed
 
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
@@ -467,6 +493,33 @@ async def monitor_loop():
         except Exception as e:
             logger.error("Failed to send alert for %s: %s", metric_anomalies[0].metric_label, e)
 
+    # ── Field value monitor checks ────────────────────────────────────────
+    try:
+        field_alerts = await loop.run_in_executor(None, detector.check_field_monitors)
+    except Exception as e:
+        logger.error("Field monitor check failed: %s", e, exc_info=True)
+        await error_channel.send(f"\u274c Field monitor check failed: {e}")
+        field_alerts = []
+
+    today_str_fa = datetime.now().strftime("%Y-%m-%d")
+    for fa in field_alerts:
+        new_unseen = [v for v in fa.new_values if (fa.monitor_id, v, today_str_fa) not in _alerted_field_keys]
+        if not new_unseen:
+            continue
+        for v in new_unseen:
+            _alerted_field_keys.add((fa.monitor_id, v, today_str_fa))
+        fa_with_unseen = FieldAlert(
+            monitor_id=fa.monitor_id,
+            label=fa.label,
+            field_name=fa.field_name,
+            new_values=new_unseen,
+            today_date=fa.today_date,
+        )
+        try:
+            await channel.send(embed=_build_field_alert_embed(fa_with_unseen))
+        except Exception as e:
+            logger.error("Failed to send field alert for %s: %s", fa.label, e)
+
 
 MAX_HISTORY_MESSAGES = 10
 
@@ -622,6 +675,7 @@ async def on_ready():
     # Ensure context notes table exists in BQ
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, bq.ensure_notes_table)
+    await loop.run_in_executor(None, bq.ensure_field_monitors_table)
     await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()

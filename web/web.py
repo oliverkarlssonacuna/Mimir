@@ -1229,6 +1229,89 @@ async def update_direction(metric_id: str, request: Request):
 
     return {"ok": True}
 
+# -> Field Monitor CRUD ->
+
+@app.get("/api/field-monitors", include_in_schema=False)
+async def list_field_monitors(request: Request):
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    monitors = bq.load_field_monitor_configs()
+    return monitors
+
+@app.post("/api/field-monitors")
+async def add_field_monitor(request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body = await request.json()
+    label       = (body.get("label") or "").strip()
+    bq_table    = (body.get("bq_table") or "").strip()
+    field_name  = (body.get("field_name") or "").strip()
+    date_field  = (body.get("date_field") or "partition_date").strip()
+    filter_sql  = (body.get("filter_sql") or "").strip()
+    if not label or not bq_table or not field_name:
+        raise HTTPException(status_code=400, detail="label, bq_table and field_name are required")
+    import uuid
+    from google.cloud import bigquery as _bq
+    monitor_id = str(uuid.uuid4())[:8]
+    sql = (
+        f"INSERT INTO `{Config.BQ_FIELD_MONITORS_TABLE}` "
+        "(monitor_id, label, bq_table, field_name, date_field, filter_sql, enabled, created_at) "
+        "VALUES (@monitor_id, @label, @bq_table, @field_name, @date_field, @filter_sql, TRUE, CURRENT_TIMESTAMP())"
+    )
+    params = [
+        _bq.ScalarQueryParameter("monitor_id",  "STRING", monitor_id),
+        _bq.ScalarQueryParameter("label",       "STRING", label),
+        _bq.ScalarQueryParameter("bq_table",    "STRING", bq_table),
+        _bq.ScalarQueryParameter("field_name",  "STRING", field_name),
+        _bq.ScalarQueryParameter("date_field",  "STRING", date_field),
+        _bq.ScalarQueryParameter("filter_sql",  "STRING", filter_sql or None),
+    ]
+    bq.run_update(sql, params)
+    logger.info("[admin] %s added field monitor %s (%s)", user["email"], monitor_id, label)
+    await _signal_bot_reload()
+    return {"ok": True, "monitor_id": monitor_id}
+
+@app.post("/api/field-monitors/{monitor_id}/toggle")
+async def toggle_field_monitor(monitor_id: str, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    body = await request.json()
+    enabled = body.get("enabled")
+    if not isinstance(enabled, bool):
+        raise HTTPException(status_code=400, detail="enabled must be a boolean")
+    from google.cloud import bigquery as _bq
+    sql = (
+        f"UPDATE `{Config.BQ_FIELD_MONITORS_TABLE}` "
+        "SET enabled = @enabled WHERE monitor_id = @monitor_id"
+    )
+    params = [
+        _bq.ScalarQueryParameter("enabled",    "BOOL",   enabled),
+        _bq.ScalarQueryParameter("monitor_id", "STRING", monitor_id),
+    ]
+    rows = bq.run_update(sql, params)
+    if rows == 0:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+    logger.info("[admin] %s toggled field monitor %s -> %s", user["email"], monitor_id, enabled)
+    await _signal_bot_reload()
+    return {"ok": True}
+
+@app.delete("/api/field-monitors/{monitor_id}")
+async def delete_field_monitor(monitor_id: str, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    from google.cloud import bigquery as _bq
+    sql = f"DELETE FROM `{Config.BQ_FIELD_MONITORS_TABLE}` WHERE monitor_id = @monitor_id"
+    params = [_bq.ScalarQueryParameter("monitor_id", "STRING", monitor_id)]
+    rows = bq.run_update(sql, params)
+    if rows == 0:
+        raise HTTPException(status_code=404, detail="Monitor not found")
+    logger.info("[admin] %s deleted field monitor %s", user["email"], monitor_id)
+    await _signal_bot_reload()
+    return {"ok": True}
+
 # -> Local dev entrypoint ->
 
 if __name__ == "__main__":

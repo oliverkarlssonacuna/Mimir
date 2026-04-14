@@ -41,6 +41,10 @@ class Config:
     BQ_METRICS_CONFIGS_TABLE: str = (
         "lia-project-sandbox-deletable.anomaly_checks_demo.bq_metrics_configs"
     )
+    # BQ config table for event field value monitors
+    BQ_FIELD_MONITORS_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.event_field_monitors"
+    )
     MAX_QUERY_ROWS: int = 200
 
     # Monitor interval – 4 hours (matches Steep cache TTL)

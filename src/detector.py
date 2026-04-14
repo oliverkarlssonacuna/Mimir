@@ -14,6 +14,15 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class FieldAlert:
+    monitor_id: str
+    label: str
+    field_name: str
+    new_values: list[str]   # values seen today but not in the past 7 days
+    today_date: str
+
+
+@dataclass
 class Anomaly:
     metric_id: str
     metric_label: str
@@ -49,6 +58,54 @@ class Detector:
             enabled_only=enabled_only, collect_data_only=collect_data_only
         )
         logger.info("Loaded %d BQ metric configs.", len(self._bq_metric_configs))
+        self._field_monitor_configs = self._load_field_monitor_configs()
+        logger.info("Loaded %d field monitor configs.", len(self._field_monitor_configs))
+
+    def _load_field_monitor_configs(self) -> list[dict]:
+        """Load event field monitor configs from BQ."""
+        return self.bq.load_field_monitor_configs()
+
+    def check_field_monitors(self) -> list["FieldAlert"]:
+        """For each configured field monitor, detect values seen today but not in the past 7 days."""
+        configs = getattr(self, "_field_monitor_configs", [])
+        if not configs:
+            return []
+
+        alerts: list[FieldAlert] = []
+        for cfg in configs:
+            monitor_id = cfg["monitor_id"]
+            label = cfg["label"]
+            bq_table = cfg["bq_table"]
+            field_name = cfg["field_name"]
+            date_field = cfg.get("date_field") or "partition_date"
+            filter_sql = (cfg.get("filter_sql") or "").strip()
+            extra_filter = f"AND ({filter_sql})" if filter_sql else ""
+
+            try:
+                past_filter = (
+                    f">= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY) "
+                    f"AND {date_field} < CURRENT_DATE()"
+                )
+                past_values = self.bq.get_distinct_field_values(
+                    bq_table, field_name, date_field, past_filter, extra_filter,
+                )
+                today_values = self.bq.get_distinct_field_values(
+                    bq_table, field_name, date_field, "= CURRENT_DATE()", extra_filter,
+                )
+                new_values = sorted(today_values - past_values)
+                if new_values:
+                    from datetime import datetime as _dt, timezone as _tz
+                    alerts.append(FieldAlert(
+                        monitor_id=monitor_id,
+                        label=label,
+                        field_name=field_name,
+                        new_values=new_values,
+                        today_date=_dt.now(_tz.utc).strftime("%Y-%m-%d"),
+                    ))
+            except Exception as e:
+                logger.error("Field monitor check failed for '%s': %s", label, e)
+
+        return alerts
 
     def _load_bq_metric_configs(self, enabled_only: bool = True, collect_data_only: bool = False) -> list[dict]:
         """Load BQ metric configs (those with a sql_query)."""

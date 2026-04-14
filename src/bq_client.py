@@ -176,6 +176,55 @@ class BQClient:
     def clear_notes(self) -> int:
         return self.run_update(f"DELETE FROM `{self.NOTES_TABLE}` WHERE TRUE")
 
+    # ── Event field monitors ───────────────────────────────────────────────
+
+    FIELD_MONITORS_TABLE = Config.BQ_FIELD_MONITORS_TABLE
+
+    def ensure_field_monitors_table(self) -> None:
+        """Create the event_field_monitors config table if it doesn't exist."""
+        self.client.query(
+            f"""CREATE TABLE IF NOT EXISTS `{self.FIELD_MONITORS_TABLE}` (
+                monitor_id  STRING    NOT NULL,
+                label       STRING    NOT NULL,
+                bq_table    STRING    NOT NULL,
+                field_name  STRING    NOT NULL,
+                date_field  STRING    NOT NULL,
+                filter_sql  STRING,
+                enabled     BOOL      NOT NULL,
+                created_at  TIMESTAMP
+            )"""
+        ).result()
+
+    def load_field_monitor_configs(self) -> list[dict]:
+        """Load enabled event field monitor configs from BQ."""
+        try:
+            sql = (
+                f"SELECT * FROM `{self.FIELD_MONITORS_TABLE}` "
+                "WHERE enabled = TRUE ORDER BY label"
+            )
+            return self.run_query(sql, max_rows=500)
+        except Exception as e:
+            logger.warning("Could not load field monitor configs: %s", e)
+            return []
+
+    def get_distinct_field_values(
+        self,
+        bq_table: str,
+        field_name: str,
+        date_field: str,
+        date_filter: str,
+        extra_filter: str = "",
+    ) -> set[str]:
+        """Return distinct string values of field_name matching date_filter."""
+        sql = (
+            f"SELECT DISTINCT CAST(`{field_name}` AS STRING) AS val "
+            f"FROM `{bq_table}` "
+            f"WHERE {date_field} {date_filter} "
+            f"{extra_filter}"
+        )
+        rows = self.run_query(sql, max_rows=2000)
+        return {r["val"] for r in rows if r.get("val") is not None}
+
     @staticmethod
     def _serialize(v: Any) -> Any:
         if isinstance(v, Decimal):
