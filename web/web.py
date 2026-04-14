@@ -70,7 +70,7 @@ oauth.register(
 
     client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", ""),
 
-    client_kwargs={"scope": "openid email profile https://www.googleapis.com/auth/bigquery.readonly"},
+    client_kwargs={"scope": "openid email profile https://www.googleapis.com/auth/bigquery"},
 
 )
 
@@ -199,7 +199,7 @@ async def login(request: Request):
         redirect_uri,
         prompt="consent",
         access_type="offline",
-        scope="openid email profile https://www.googleapis.com/auth/bigquery.readonly",
+        scope="openid email profile https://www.googleapis.com/auth/bigquery",
     )
 
 @app.get("/auth/callback", name="auth_callback", include_in_schema=False)
