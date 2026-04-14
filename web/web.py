@@ -233,18 +233,8 @@ async def auth_callback(request: Request):
     }
 
     request.session["access_token"] = token.get("access_token", "")
-    request.session["token_scope"] = token.get("scope", "")
 
     return RedirectResponse("/admin")
-
-@app.get("/api/debug-token", include_in_schema=False)
-async def debug_token(request: Request):
-    if not _user(request):
-        raise HTTPException(status_code=401)
-    return {
-        "access_token_present": bool(request.session.get("access_token")),
-        "scope": request.session.get("token_scope", "NOT SAVED"),
-    }
 
 @app.get("/auth/logout", include_in_schema=False)
 
