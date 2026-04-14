@@ -1896,10 +1896,8 @@
         const payload = await r.json();
         loading.classList.add('hidden');
         if (!r.ok) {
-          if (r.status === 403 || (payload.detail && payload.detail.includes('403'))) {
-            loading.textContent = '⚠️ No schema access — sign out and back in, then try again.';
-            loading.classList.remove('hidden');
-          }
+          loading.textContent = `⚠️ Error ${r.status}: ${payload.detail || 'Unknown error'}`;
+          loading.classList.remove('hidden');
           return;
         }
         const cols = payload;
