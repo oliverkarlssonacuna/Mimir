@@ -1894,9 +1894,15 @@
       try {
         const r = await fetch(`/api/bq-table-columns?table=${encodeURIComponent(bqTable)}`);
         const payload = await r.json();
-        if (!r.ok) throw new Error(payload.detail || `HTTP ${r.status}`);
-        const cols = payload;
         loading.classList.add('hidden');
+        if (!r.ok) {
+          if (r.status === 403 || (payload.detail && payload.detail.includes('403'))) {
+            loading.textContent = '⚠️ No schema access — type field name manually above.';
+            loading.classList.remove('hidden');
+          }
+          return;
+        }
+        const cols = payload;
         if (!cols.length) return;
         pills.classList.remove('hidden');
         pills.classList.add('flex');

@@ -70,7 +70,7 @@ oauth.register(
 
     client_secret=os.environ.get("GOOGLE_CLIENT_SECRET", ""),
 
-    client_kwargs={"scope": "openid email profile"},
+    client_kwargs={"scope": "openid email profile https://www.googleapis.com/auth/bigquery.readonly"},
 
 )
 
@@ -225,6 +225,8 @@ async def auth_callback(request: Request):
         "name": userinfo.get("name", email),
 
     }
+
+    request.session["access_token"] = token.get("access_token", "")
 
     return RedirectResponse("/admin")
 
@@ -1253,7 +1255,7 @@ async def field_monitor_catalog(request: Request):
 
 @app.get("/api/bq-table-columns", include_in_schema=False)
 async def bq_table_columns(request: Request, table: str):
-    """Return column names for a given BQ table via INFORMATION_SCHEMA."""
+    """Return column names for a given BQ table via INFORMATION_SCHEMA, using user's OAuth token."""
     if not _user(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not table or "`" in table or ";" in table or len(table) > 300:
@@ -1263,6 +1265,7 @@ async def bq_table_columns(request: Request, table: str):
         raise HTTPException(status_code=400, detail="Expected project.dataset.table")
     project, dataset, tbl_name = parts
     from google.cloud import bigquery as _bq
+    from google.oauth2.credentials import Credentials
     sql = (
         f"SELECT column_name, data_type "
         f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
@@ -1271,8 +1274,18 @@ async def bq_table_columns(request: Request, table: str):
     )
     params = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
     try:
-        rows = bq.run_query(sql, params=params, max_rows=500)
-        return [{"name": r["column_name"], "type": r["data_type"]} for r in rows]
+        access_token = request.session.get("access_token", "")
+        if access_token and _is_cloud:
+            creds = Credentials(token=access_token)
+            user_bq = _bq.Client(project=project, credentials=creds)
+            job_config = _bq.QueryJobConfig(query_parameters=params)
+            job = user_bq.query(sql, job_config=job_config)
+            rows = list(job.result())
+            return [{"name": r["column_name"], "type": r["data_type"]} for r in rows]
+        else:
+            # Local dev — use default service account
+            rows = bq.run_query(sql, params=params, max_rows=500)
+            return [{"name": r["column_name"], "type": r["data_type"]} for r in rows]
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
