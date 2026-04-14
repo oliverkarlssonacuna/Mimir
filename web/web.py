@@ -1253,23 +1253,26 @@ async def field_monitor_catalog(request: Request):
 
 @app.get("/api/bq-table-columns", include_in_schema=False)
 async def bq_table_columns(request: Request, table: str):
-    """Return column names for a given BQ table."""
+    """Return column names for a given BQ table via INFORMATION_SCHEMA."""
     if not _user(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if not table or "`" in table or ";" in table:
+    if not table or "`" in table or ";" in table or len(table) > 300:
         raise HTTPException(status_code=400, detail="Invalid table name")
+    parts = table.split(".")
+    if len(parts) != 3:
+        raise HTTPException(status_code=400, detail="Expected project.dataset.table")
+    project, dataset, tbl_name = parts
+    from google.cloud import bigquery as _bq
+    sql = (
+        f"SELECT column_name, data_type "
+        f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
+        f"WHERE table_name = @tbl "
+        f"ORDER BY ordinal_position"
+    )
+    params = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
     try:
-        parts = table.split(".")
-        if len(parts) != 3:
-            raise ValueError("Expected project.dataset.table")
-        project, dataset, tbl = parts
-        bq_client = bq.client
-        table_ref = bq_client.get_table(f"{project}.{dataset}.{tbl}")
-        columns = [
-            {"name": field.name, "type": field.field_type}
-            for field in table_ref.schema
-        ]
-        return columns
+        rows = bq.run_query(sql, params=params, max_rows=500)
+        return [{"name": r["column_name"], "type": r["data_type"]} for r in rows]
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
