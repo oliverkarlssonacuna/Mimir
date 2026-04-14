@@ -1897,7 +1897,7 @@
         loading.classList.add('hidden');
         if (!r.ok) {
           if (r.status === 403 || (payload.detail && payload.detail.includes('403'))) {
-            loading.textContent = '⚠️ No schema access — type field name manually above.';
+            loading.textContent = '⚠️ No schema access — sign out and back in, then try again.';
             loading.classList.remove('hidden');
           }
           return;
