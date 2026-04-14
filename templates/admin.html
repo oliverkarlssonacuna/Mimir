@@ -719,7 +719,7 @@
 
         <!-- Catalog picker -->
         <div>
-          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(auto-fills table below)</span></label>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(or fill in manually below)</span></label>
           <div class="relative">
             <input type="text" id="fm-catalog-search" placeholder="Search catalog…" autocomplete="off"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
@@ -734,10 +734,10 @@
           </div>
         </div>
 
-        <!-- Label -->
+        <!-- Monitor Name -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Monitor Name *</label>
-          <input id="fm-label" type="text" placeholder="e.g. Character Class Values"
+          <input type="text" id="fm-label" placeholder="e.g. Character Class Values"
             class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
             style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
@@ -745,8 +745,8 @@
         <!-- BQ Table -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">BQ Table *</label>
-          <input id="fm-bq-table" type="text" placeholder="project.dataset.table"
-            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono text-sm"
+          <input type="text" id="fm-bq-table" placeholder="project.dataset.table"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
             style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
 
@@ -754,27 +754,16 @@
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Field Name *</label>
-            <input id="fm-field-name" type="text" placeholder="e.g. character_class"
+            <input type="text" id="fm-field-name" placeholder="e.g. character_class"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
           <div>
             <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Date Field <span style="color:#4f5668;">(default: partition_date)</span></label>
-            <input id="fm-date-field" type="text" placeholder="partition_date"
+            <input type="text" id="fm-date-field" placeholder="partition_date"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
-        </div>
-
-        <!-- Extra filter -->
-        <div>
-          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">
-            Extra filter SQL
-            <span class="ml-1 font-normal" style="color:#4f5668;">— optional, added as <code style="color:#818cf8;">AND (…)</code> in WHERE</span>
-          </label>
-          <input id="fm-filter-sql" type="text" placeholder="e.g. platform = 'ios'"
-            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
-            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
 
         <div id="fm-error" class="hidden text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
@@ -1813,7 +1802,6 @@
       document.getElementById('fm-bq-table').value = '';
       document.getElementById('fm-field-name').value = '';
       document.getElementById('fm-date-field').value = '';
-      document.getElementById('fm-filter-sql').value = '';
       document.getElementById('fm-catalog-search').value = '';
       document.getElementById('fm-catalog-items').innerHTML = '';
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
@@ -1909,11 +1897,10 @@
       const bqTable    = document.getElementById('fm-bq-table').value.trim();
       const fieldName  = document.getElementById('fm-field-name').value.trim();
       const dateField  = document.getElementById('fm-date-field').value.trim() || 'partition_date';
-      const filterSql  = document.getElementById('fm-filter-sql').value.trim();
       const errEl      = document.getElementById('fm-error');
 
       if (!label || !bqTable || !fieldName) {
-        errEl.textContent = 'Label, BQ Table and Field Name are required.';
+        errEl.textContent = 'Monitor Name, BQ Table and Field Name are required.';
         errEl.classList.remove('hidden');
         return;
       }
@@ -1921,7 +1908,7 @@
       try {
         const r = await fetch('/api/field-monitors', {
           method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ label, bq_table: bqTable, field_name: fieldName, date_field: dateField, filter_sql: filterSql }),
+          body: JSON.stringify({ label, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
         });
         const data = await r.json();
         if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
