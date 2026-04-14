@@ -712,6 +712,23 @@
       </div>
 
       <div class="space-y-4">
+        <!-- Catalog picker -->
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(auto-fills table below)</span></label>
+          <div class="relative">
+            <input type="text" id="fm-catalog-search" placeholder="Search tables…" autocomplete="off"
+              class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
+              style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
+              onfocus="showFmCatalogDropdown()" oninput="filterFmCatalogDropdown()"
+              onfocusout="setTimeout(()=>document.getElementById('fm-catalog-dropdown').classList.add('hidden'),150)">
+            <div id="fm-catalog-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-lg border shadow-xl z-10"
+                 style="background:#1c1f27; border-color:#2a2d38;">
+              <div id="fm-catalog-loading" class="px-4 py-3 text-xs" style="color:#6b7385;">Loading…</div>
+              <div id="fm-catalog-items"></div>
+            </div>
+          </div>
+        </div>
+
         <div>
           <label class="block text-xs font-medium mb-1" style="color:#9aa0b4;">Label <span style="color:#f87171;">*</span></label>
           <input id="fm-label" type="text" placeholder="e.g. Character Class Values"
@@ -1797,9 +1814,90 @@
       document.getElementById('fm-field-name').value = '';
       document.getElementById('fm-date-field').value = '';
       document.getElementById('fm-filter-sql').value = '';
+      document.getElementById('fm-catalog-search').value = '';
+      document.getElementById('fm-catalog-items').innerHTML = '';
+      document.getElementById('fm-catalog-dropdown').classList.add('hidden');
       document.getElementById('fm-error').classList.add('hidden');
+      _fmCatalog = null;
       document.getElementById('add-field-modal').classList.remove('hidden');
-      setTimeout(() => document.getElementById('fm-label').focus(), 50);
+      setTimeout(() => document.getElementById('fm-catalog-search').focus(), 50);
+    }
+
+    let _fmCatalog = null;
+
+    async function _loadFmCatalog() {
+      if (_fmCatalog !== null) return _fmCatalog;
+      try {
+        const r = await fetch('/api/field-monitors/catalog');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        _fmCatalog = await r.json();
+      } catch (err) {
+        _fmCatalog = [];
+      }
+      return _fmCatalog;
+    }
+
+    async function showFmCatalogDropdown() {
+      const dropdown = document.getElementById('fm-catalog-dropdown');
+      const loading  = document.getElementById('fm-catalog-loading');
+      const items    = document.getElementById('fm-catalog-items');
+      dropdown.classList.remove('hidden');
+      loading.classList.remove('hidden');
+      items.innerHTML = '';
+
+      const catalog = await _loadFmCatalog();
+      loading.classList.add('hidden');
+
+      const query = document.getElementById('fm-catalog-search').value.toLowerCase();
+      _renderFmCatalogItems(catalog, query);
+    }
+
+    function filterFmCatalogDropdown() {
+      if (!_fmCatalog) return;
+      const query = document.getElementById('fm-catalog-search').value.toLowerCase();
+      _renderFmCatalogItems(_fmCatalog, query);
+      document.getElementById('fm-catalog-dropdown').classList.remove('hidden');
+    }
+
+    function _renderFmCatalogItems(catalog, query) {
+      const items = document.getElementById('fm-catalog-items');
+      const filtered = query
+        ? catalog.filter(e => e.label.toLowerCase().includes(query) || e.category.toLowerCase().includes(query) || e.bq_table.toLowerCase().includes(query))
+        : catalog;
+
+      if (!filtered.length) {
+        items.innerHTML = '<div class="px-4 py-3 text-xs" style="color:#6b7385;">No matches</div>';
+        return;
+      }
+
+      // Group by category
+      const grouped = {};
+      for (const e of filtered) {
+        (grouped[e.category] = grouped[e.category] || []).push(e);
+      }
+
+      items.innerHTML = Object.entries(grouped).map(([cat, entries]) => `
+        <div class="px-3 pt-2 pb-0.5 text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">${escHtml(cat)}</div>
+        ${entries.map(e => `
+          <div class="px-4 py-2 text-sm cursor-pointer transition-colors"
+               style="color:#c8cdd8;"
+               onmouseover="this.style.background='#2a2d38'" onmouseout="this.style.background=''"
+               onclick="selectFmCatalogEntry(${JSON.stringify(escHtml(e.label))}, ${JSON.stringify(escHtml(e.bq_table))})">
+            <div class="font-medium">${escHtml(e.label)}</div>
+            <div class="text-xs font-mono mt-0.5" style="color:#6b7385;">${escHtml(e.bq_table)}</div>
+          </div>
+        `).join('')}
+      `).join('');
+    }
+
+    function selectFmCatalogEntry(label, bqTable) {
+      document.getElementById('fm-catalog-search').value = label;
+      document.getElementById('fm-bq-table').value = bqTable;
+      if (!document.getElementById('fm-label').value) {
+        document.getElementById('fm-label').value = label;
+      }
+      document.getElementById('fm-catalog-dropdown').classList.add('hidden');
+      document.getElementById('fm-field-name').focus();
     }
 
     function closeAddFieldModal() {

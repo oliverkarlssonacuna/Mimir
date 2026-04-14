@@ -1231,6 +1231,26 @@ async def update_direction(metric_id: str, request: Request):
 
 # -> Field Monitor CRUD ->
 
+@app.get("/api/field-monitors/catalog", include_in_schema=False)
+async def field_monitor_catalog(request: Request):
+    """Return catalog entries with their main BQ table, for use in Field Monitor picker."""
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    import re
+    from bq_catalog import get_catalog
+    result = []
+    for entry in get_catalog():
+        # Extract first FROM `table` from the SQL
+        match = re.search(r"FROM\s+`([^`]+)`", entry.get("sql_query", ""), re.IGNORECASE)
+        bq_table = match.group(1) if match else ""
+        result.append({
+            "id":       entry["id"],
+            "label":    entry["label"],
+            "category": entry.get("category", ""),
+            "bq_table": bq_table,
+        })
+    return result
+
 @app.get("/api/field-monitors", include_in_schema=False)
 async def list_field_monitors(request: Request):
     if not _user(request):
