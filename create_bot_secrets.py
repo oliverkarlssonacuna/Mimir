@@ -16,8 +16,9 @@ with open("/home/oliver/Mimir/.env") as f:
 
 token = env.get("DISCORD_BOT_TOKEN", "")
 channel = env.get("DISCORD_ALERT_CHANNEL_ID", "")
+error_channel = env.get("DISCORD_ERROR_CHANNEL_ID", "")
 
-print(f"Token length: {len(token)}, Channel ID: {channel}")
+print(f"Token length: {len(token)}, Channel ID: {channel}, Error Channel ID: {error_channel}")
 
 def create_or_update_secret(name, value):
     # Try create first
@@ -43,4 +44,5 @@ def create_or_update_secret(name, value):
 
 create_or_update_secret("mimir-discord-bot-token", token)
 create_or_update_secret("mimir-discord-alert-channel-id", channel)
+create_or_update_secret("mimir-discord-error-channel-id", error_channel)
 print("Done!")

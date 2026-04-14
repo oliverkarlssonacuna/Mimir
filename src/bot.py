@@ -92,6 +92,14 @@ def _reset_thread_timer(thread_id: int):
     _thread_timers[thread_id] = asyncio.create_task(_auto_close_thread(thread_id))
 
 
+def _get_error_channel() -> discord.TextChannel | None:
+    """Return the configured debug/error channel, or None if not set."""
+    channel_id = Config.DISCORD_ERROR_CHANNEL_ID
+    if channel_id:
+        return bot.get_channel(int(channel_id))
+    return None
+
+
 # ── Setup ─────────────────────────────────────────────────────────────────────
 
 bq = BQClient(project_id=Config.GCP_PROJECT_ID, max_rows=Config.MAX_QUERY_ROWS)
@@ -546,6 +554,9 @@ async def on_message(message: discord.Message):
                     await message.channel.send(content=chunk)
         except Exception as e:
             logger.error("Thread follow-up failed: %s", e, exc_info=True)
+            debug_ch = _get_error_channel()
+            if debug_ch:
+                await debug_ch.send(f"❌ Thread follow-up failed in `{message.channel.name}`: {e}")
             await message.channel.send(f"Something went wrong: {e}")
 
 
@@ -931,7 +942,10 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
         except Exception as e:
             logger.error("Analysis thread failed: %s", e)
-            await interaction.followup.send(f"Could not create analysis thread: {e}")
+            debug_ch = _get_error_channel()
+            if debug_ch:
+                await debug_ch.send(f"❌ Analysis thread failed for `{metric_info.get('metric_label', metric_id)}`: {e}")
+            await interaction.followup.send("Could not create analysis thread — see debug channel for details.", ephemeral=True)
 
     elif action == "handled":
         handled_by = interaction.user.display_name
