@@ -1240,7 +1240,6 @@ async def field_monitor_catalog(request: Request):
     from bq_catalog import get_catalog
     result = []
     for entry in get_catalog():
-        # Extract first FROM `table` from the SQL
         match = re.search(r"FROM\s+`([^`]+)`", entry.get("sql_query", ""), re.IGNORECASE)
         bq_table = match.group(1) if match else ""
         result.append({
@@ -1250,6 +1249,29 @@ async def field_monitor_catalog(request: Request):
             "bq_table": bq_table,
         })
     return result
+
+
+@app.get("/api/bq-table-columns", include_in_schema=False)
+async def bq_table_columns(request: Request, table: str):
+    """Return column names for a given BQ table."""
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not table or "`" in table or ";" in table:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+    try:
+        parts = table.split(".")
+        if len(parts) != 3:
+            raise ValueError("Expected project.dataset.table")
+        project, dataset, tbl = parts
+        bq_client = bq.client
+        table_ref = bq_client.get_table(f"{project}.{dataset}.{tbl}")
+        columns = [
+            {"name": field.name, "type": field.field_type}
+            for field in table_ref.schema
+        ]
+        return columns
+    except Exception as e:
+        raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
 @app.get("/api/field-monitors", include_in_schema=False)
 async def list_field_monitors(request: Request):
