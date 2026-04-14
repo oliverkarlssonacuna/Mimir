@@ -703,87 +703,87 @@
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
   <!-- MODAL: Add Field Monitor                                               -->
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
-  <div id="add-field-modal" class="fixed inset-0 z-50 flex items-center justify-center hidden"
-       style="background:rgba(0,0,0,0.7);" onclick="if(event.target===this) closeAddFieldModal()">
-    <div class="rounded-xl border shadow-2xl w-full max-w-lg mx-4 p-6" style="background:#1c1f27; border-color:#2a2d38;">
-      <div class="flex items-center justify-between mb-5">
-        <h2 class="text-base font-semibold text-white">Add Field Monitor</h2>
-        <button onclick="closeAddFieldModal()" style="color:#6b7385;" class="hover:text-white transition-colors">✕</button>
+  <div id="add-field-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-2xl mx-4 overflow-hidden flex flex-col"
+         style="background:#1c1f27; border-color:#2a2d38; max-height:90vh;">
+      <div class="px-6 py-4 border-b flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
+        <h2 class="text-lg font-semibold text-white">Add Field Monitor</h2>
+        <button onclick="closeAddFieldModal()" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
       </div>
+      <div class="px-6 py-5 space-y-4 overflow-y-auto">
 
-      <div class="space-y-4">
         <!-- Catalog picker -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(auto-fills table below)</span></label>
           <div class="relative">
-            <input type="text" id="fm-catalog-search" placeholder="Search tables…" autocomplete="off"
+            <input type="text" id="fm-catalog-search" placeholder="Search catalog…" autocomplete="off"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
               onfocus="showFmCatalogDropdown()" oninput="filterFmCatalogDropdown()"
               onfocusout="setTimeout(()=>document.getElementById('fm-catalog-dropdown').classList.add('hidden'),150)">
-            <div id="fm-catalog-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 max-h-56 overflow-y-auto rounded-lg border shadow-xl z-10"
+            <div id="fm-catalog-dropdown" class="hidden absolute left-0 right-0 top-full mt-1 max-h-60 overflow-y-auto rounded-lg border shadow-xl z-10"
                  style="background:#1c1f27; border-color:#2a2d38;">
-              <div id="fm-catalog-loading" class="px-4 py-3 text-xs" style="color:#6b7385;">Loading…</div>
+              <div id="fm-catalog-loading" class="px-4 py-3 text-xs" style="color:#6b7385;">Loading catalog…</div>
               <div id="fm-catalog-items"></div>
             </div>
           </div>
         </div>
 
+        <!-- Label -->
         <div>
-          <label class="block text-xs font-medium mb-1" style="color:#9aa0b4;">Label <span style="color:#f87171;">*</span></label>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Monitor Name *</label>
           <input id="fm-label" type="text" placeholder="e.g. Character Class Values"
             class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
-            style="background:#13151a; border-color:#2a2d38; color:#e2e8f0;"
-            onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#2a2d38'">
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
+
+        <!-- BQ Table -->
         <div>
-          <label class="block text-xs font-medium mb-1" style="color:#9aa0b4;">BQ Table <span style="color:#f87171;">*</span></label>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">BQ Table *</label>
           <input id="fm-bq-table" type="text" placeholder="project.dataset.table"
-            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
-            style="background:#13151a; border-color:#2a2d38; color:#e2e8f0;"
-            onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#2a2d38'">
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono text-sm"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
+
+        <!-- Field Name + Date Field -->
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium mb-1" style="color:#9aa0b4;">Field Name <span style="color:#f87171;">*</span></label>
+            <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Field Name *</label>
             <input id="fm-field-name" type="text" placeholder="e.g. character_class"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
-              style="background:#13151a; border-color:#2a2d38; color:#e2e8f0;"
-              onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#2a2d38'">
+              style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
           <div>
-            <label class="block text-xs font-medium mb-1" style="color:#9aa0b4;">Date Field</label>
+            <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Date Field <span style="color:#4f5668;">(default: partition_date)</span></label>
             <input id="fm-date-field" type="text" placeholder="partition_date"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
-              style="background:#13151a; border-color:#2a2d38; color:#e2e8f0;"
-              onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#2a2d38'">
+              style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
         </div>
+
+        <!-- Extra filter -->
         <div>
-          <label class="block text-xs font-medium mb-1" style="color:#9aa0b4;">
-            Extra filter SQL <span style="color:#4f5668;">(optional — added as AND (…) in WHERE)</span>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">
+            Extra filter SQL
+            <span class="ml-1 font-normal" style="color:#4f5668;">— optional, added as <code style="color:#818cf8;">AND (…)</code> in WHERE</span>
           </label>
           <input id="fm-filter-sql" type="text" placeholder="e.g. platform = 'ios'"
             class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
-            style="background:#13151a; border-color:#2a2d38; color:#e2e8f0;"
-            onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#2a2d38'">
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
+
+        <div id="fm-error" class="hidden text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
       </div>
-
-      <div id="fm-error" class="hidden mt-3 text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
-
-      <div class="flex justify-end gap-3 mt-6">
+      <div class="px-6 py-4 border-t flex items-center justify-end gap-3 flex-shrink-0" style="border-color:#2a2d38;">
         <button onclick="closeAddFieldModal()"
-          class="px-4 py-2 text-sm rounded-lg border"
-          style="border-color:#2a2d38; color:#9aa0b4; background:#13151a;">
-          Cancel
-        </button>
+          class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
         <button onclick="submitAddFieldMonitor()"
-          class="px-4 py-2 text-sm font-medium rounded-lg"
-          style="background:#4f46e5; color:#fff;"
-          onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
-          Add Monitor
-        </button>
+          class="text-sm font-medium px-5 py-2 rounded-lg" style="background:#4f46e5; color:#fff;">Add Monitor</button>
       </div>
     </div>
   </div>
