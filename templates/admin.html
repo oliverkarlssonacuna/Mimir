@@ -1826,67 +1826,65 @@
     }
 
     async function showFmCatalogDropdown() {
-      const dropdown = document.getElementById('fm-catalog-dropdown');
-      const loading  = document.getElementById('fm-catalog-loading');
-      const items    = document.getElementById('fm-catalog-items');
-      dropdown.classList.remove('hidden');
-      loading.classList.remove('hidden');
-      items.innerHTML = '';
-
-      const catalog = await _loadFmCatalog();
-      loading.classList.add('hidden');
-
-      const query = document.getElementById('fm-catalog-search').value.toLowerCase();
-      _renderFmCatalogItems(catalog, query);
+      await _loadFmCatalog();
+      document.getElementById('fm-catalog-dropdown').classList.remove('hidden');
+      renderFmCatalogItems(_fmCatalog);
     }
 
     function filterFmCatalogDropdown() {
       if (!_fmCatalog) return;
-      const query = document.getElementById('fm-catalog-search').value.toLowerCase();
-      _renderFmCatalogItems(_fmCatalog, query);
+      const q = document.getElementById('fm-catalog-search').value.toLowerCase();
+      const filtered = _fmCatalog.filter(e =>
+        e.label.toLowerCase().includes(q) || e.category.toLowerCase().includes(q)
+      );
       document.getElementById('fm-catalog-dropdown').classList.remove('hidden');
+      renderFmCatalogItems(filtered);
     }
 
-    function _renderFmCatalogItems(catalog, query) {
-      const items = document.getElementById('fm-catalog-items');
-      const filtered = query
-        ? catalog.filter(e => e.label.toLowerCase().includes(query) || e.category.toLowerCase().includes(query) || e.bq_table.toLowerCase().includes(query))
-        : catalog;
-
-      if (!filtered.length) {
-        items.innerHTML = '<div class="px-4 py-3 text-xs" style="color:#6b7385;">No matches</div>';
+    function renderFmCatalogItems(items) {
+      const loading   = document.getElementById('fm-catalog-loading');
+      const container = document.getElementById('fm-catalog-items');
+      loading.classList.add('hidden');
+      container.innerHTML = '';
+      if (!items.length) {
+        container.innerHTML = '<div class="px-4 py-3 text-xs" style="color:#6b7385;">No results.</div>';
         return;
       }
-
-      // Group by category
-      const grouped = {};
-      for (const e of filtered) {
-        (grouped[e.category] = grouped[e.category] || []).push(e);
+      const groups = {};
+      items.forEach(e => { (groups[e.category] = groups[e.category] || []).push(e); });
+      for (const [cat, entries] of Object.entries(groups)) {
+        const header = document.createElement('div');
+        header.className = 'px-4 py-1.5 text-xs font-semibold uppercase tracking-wide';
+        header.style.color = '#4f5668';
+        header.textContent = cat;
+        container.appendChild(header);
+        entries.forEach(e => {
+          const row = document.createElement('div');
+          row.className = 'px-4 py-2 text-sm cursor-pointer transition-colors';
+          row.style.color = '#c8cdd8';
+          row.textContent = e.label;
+          row.onmouseover = () => row.style.background = '#20232c';
+          row.onmouseout  = () => row.style.background = '';
+          row.onclick = () => selectFmCatalogItem(e);
+          container.appendChild(row);
+        });
       }
-
-      items.innerHTML = Object.entries(grouped).map(([cat, entries]) => `
-        <div class="px-3 pt-2 pb-0.5 text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">${escHtml(cat)}</div>
-        ${entries.map(e => `
-          <div class="px-4 py-2 text-sm cursor-pointer transition-colors"
-               style="color:#c8cdd8;"
-               onmouseover="this.style.background='#2a2d38'" onmouseout="this.style.background=''"
-               onclick="selectFmCatalogEntry(${JSON.stringify(escHtml(e.label))}, ${JSON.stringify(escHtml(e.bq_table))})">
-            <div class="font-medium">${escHtml(e.label)}</div>
-            <div class="text-xs font-mono mt-0.5" style="color:#6b7385;">${escHtml(e.bq_table)}</div>
-          </div>
-        `).join('')}
-      `).join('');
     }
 
-    function selectFmCatalogEntry(label, bqTable) {
-      document.getElementById('fm-catalog-search').value = label;
-      document.getElementById('fm-bq-table').value = bqTable;
-      if (!document.getElementById('fm-label').value) {
-        document.getElementById('fm-label').value = label;
-      }
+    function selectFmCatalogItem(entry) {
+      document.getElementById('fm-catalog-search').value = entry.label;
+      document.getElementById('fm-label').value = entry.label;
+      document.getElementById('fm-bq-table').value = entry.bq_table;
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
-      document.getElementById('fm-field-name').focus();
     }
+
+    document.addEventListener('click', (e) => {
+      const dd    = document.getElementById('fm-catalog-dropdown');
+      const input = document.getElementById('fm-catalog-search');
+      if (dd && input && !dd.contains(e.target) && e.target !== input) {
+        dd.classList.add('hidden');
+      }
+    });
 
     function closeAddFieldModal() {
       document.getElementById('add-field-modal').classList.add('hidden');
