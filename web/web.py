@@ -1285,23 +1285,38 @@ async def bq_table_columns(request: Request, table: str):
                 return [dict(r) for r in client.query(sql, job_config=job_config).result()]
             return bq.run_query(sql, params=params, max_rows=500)
 
-        # Try with description column first; fall back if not supported
+        # Top-level columns (try with description, fall back without)
         try:
             sql = (
                 f"SELECT column_name, data_type, description "
                 f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
                 f"WHERE table_name = @tbl ORDER BY ordinal_position"
             )
-            rows = _run_sql(sql)
-            return [{"name": r["column_name"], "type": r["data_type"], "description": r.get("description") or ""} for r in rows]
+            top_rows = _run_sql(sql)
+            top_cols = [{"name": r["column_name"], "type": r["data_type"], "description": r.get("description") or ""} for r in top_rows]
         except Exception:
             sql = (
                 f"SELECT column_name, data_type "
                 f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
                 f"WHERE table_name = @tbl ORDER BY ordinal_position"
             )
-            rows = _run_sql(sql)
-            return [{"name": r["column_name"], "type": r["data_type"], "description": ""} for r in rows]
+            top_rows = _run_sql(sql)
+            top_cols = [{"name": r["column_name"], "type": r["data_type"], "description": ""} for r in top_rows]
+
+        # Nested STRUCT sub-fields (STRING only) via COLUMN_FIELD_PATHS
+        try:
+            sql = (
+                f"SELECT field_path "
+                f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` "
+                f"WHERE table_name = @tbl AND data_type = 'STRING' AND field_path != column_name "
+                f"ORDER BY field_path"
+            )
+            nested_rows = _run_sql(sql)
+            nested_cols = [{"name": r["field_path"], "type": "STRING", "description": ""} for r in nested_rows]
+        except Exception:
+            nested_cols = []
+
+        return top_cols + nested_cols
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
@@ -1331,21 +1346,38 @@ async def analyze_bq_table_columns(request: Request, table: str, date_field: str
         return bq.run_query(sql, params=params or [], max_rows=500)
 
     try:
+        tbl_param = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
+        # Top-level STRING columns
         string_cols = [
             r["column_name"]
             for r in _exec(
                 f"SELECT column_name FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
                 f"WHERE table_name = @tbl AND data_type = 'STRING' ORDER BY ordinal_position",
-                [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)],
+                tbl_param,
             )
         ]
+        # Nested STRUCT sub-fields that are STRING
+        try:
+            nested_cols = [
+                r["field_path"]
+                for r in _exec(
+                    f"SELECT field_path FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` "
+                    f"WHERE table_name = @tbl AND data_type = 'STRING' AND field_path != column_name "
+                    f"ORDER BY field_path",
+                    tbl_param,
+                )
+            ]
+        except Exception:
+            nested_cols = []
+        string_cols = string_cols + nested_cols
         if not string_cols:
             return {}
 
         # Use safe positional aliases to avoid reserved-word issues
         aliases = [f"_c{i}_" for i in range(len(string_cols))]
         approx_parts = ", ".join(
-            f"APPROX_COUNT_DISTINCT(`{c}`) AS `{a}`"
+            # Nested paths (e.g. metadata.event_type) must NOT use backticks
+            f"APPROX_COUNT_DISTINCT({'`' + c + '`' if '.' not in c else c}) AS {a}"
             for c, a in zip(string_cols, aliases)
         )
 

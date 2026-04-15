@@ -2012,6 +2012,18 @@
           for (const col of stringCols) {
             const d = analysis[col.name];
             if (!d) continue;
+
+            // If query returned no rows (empty partition), keep Phase 1 heuristic
+            if (d.total === 0) {
+              const existing = wrap.querySelector(`button[data-col="${CSS.escape(col.name)}"]`);
+              if (existing) {
+                const badgeSpan = existing.querySelector('span:last-child');
+                if (badgeSpan) badgeSpan.textContent = 'no data';
+                existing.title = `${col.name} · STRING\n⚠ No data found for this partition — using name heuristic`;
+              }
+              continue;
+            }
+
             const nameIsId = isLikelyId(col.name);
             // ≤50 distinct = enum-like → always recommended (overrides name heuristic).
             // >50 distinct: use ratio, but never recommend pure ID columns.
