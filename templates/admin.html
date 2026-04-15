@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="en" class="h-full">
 <head>
   <meta charset="UTF-8">
@@ -813,7 +813,10 @@
 
       <!-- Step 2: running analysis -->
       <div id="disc-step-2" class="hidden px-6 py-10 text-center flex-1">
-        <div class="text-4xl mb-4">⏳</div>
+        <div class="relative inline-flex items-center justify-center mb-4" style="width:80px;height:80px;">
+          <div style="position:absolute;width:80px;height:80px;border-radius:50%;border:3px solid #2a2d38;border-top-color:#4f46e5;animation:spin 1s linear infinite;"></div>
+          <img src="/static/logo.png" style="width:48px;height:48px;object-fit:contain;border-radius:8px;">
+        </div>
         <p class="text-sm font-medium text-white mb-2" id="disc-progress-label">Analysing tables…</p>
         <p class="text-xs" style="color:#6b7385;">This may take up to a minute</p>
         <div class="mt-4 rounded-full h-1.5 overflow-hidden" style="background:#2a2d38;">
@@ -823,12 +826,8 @@
 
       <!-- Step 3: review results -->
       <div id="disc-step-3" class="hidden px-6 py-5 overflow-y-auto flex-1">
-        <div class="flex items-center justify-between mb-3">
-          <p class="text-sm" style="color:#9aa0b4;">Review suggestions — uncheck anything you don’t want:</p>
-          <div class="flex gap-2">
-            <button onclick="_discToggleAll(true)" class="text-xs px-2 py-1 rounded" style="background:#1a1f35;color:#818cf8;border:1px solid #2a2d38;">Select all</button>
-            <button onclick="_discToggleAll(false)" class="text-xs px-2 py-1 rounded" style="background:#13151a;color:#6b7385;border:1px solid #2a2d38;">Deselect all</button>
-          </div>
+        <div class="mb-3">
+          <p class="text-sm" style="color:#9aa0b4;">Review suggestions — check or uncheck fields as you want:</p>
         </div>
         <div id="disc-results" class="space-y-4"></div>
       </div>
@@ -2111,12 +2110,12 @@
       container.innerHTML = Object.entries(grouped).map(([tbl, { rec, notRec }]) => {
         const shortTbl = tbl.split('.').pop();
         const renderField = (f, checked) => `
-          <label class="flex items-start gap-3 cursor-pointer p-2 rounded" style="background:${checked ? '#1a1d2e' : '#16181f'}; border:1px solid ${checked ? '#2e3460' : '#22242c'};">
+          <label class="flex items-start gap-3 cursor-pointer p-2 rounded disc-field-label" data-checked="${checked ? '1' : '0'}" style="background:${checked ? '#1a1d2e' : '#16181f'}; border:1px solid ${checked ? '#2e3460' : '#22242c'};">
             <input type="checkbox" class="disc-sug-check mt-0.5 shrink-0" data-idx="${f._idx}" ${checked ? 'checked' : ''}
-              style="accent-color:#4f46e5;">
+              style="accent-color:#4f46e5;" onchange="_discFieldToggle(this)">
             <div class="min-w-0">
               <div class="flex items-center gap-2 flex-wrap">
-                <span class="text-sm font-mono font-medium" style="color:${checked ? '#a5b4fc' : '#52566b'};">${escHtml(f.field_name)}</span>
+                <span class="text-sm font-mono font-medium disc-field-name" style="color:${checked ? '#a5b4fc' : '#52566b'};">${escHtml(f.field_name)}</span>
                 ${f.is_array ? `<span class="text-xs px-1.5 py-0.5 rounded" style="background:#2d2a1a;color:#fbbf24;border:1px solid #4a3f10;">ARRAY</span>` : ''}
               </div>
               ${f.description ? `<span class="block text-xs mt-0.5" style="color:${checked ? '#8b95b8' : '#474c60'};">📋 ${escHtml(f.description.slice(0, 140))}</span>` : ''}
@@ -2182,6 +2181,20 @@
 
     function _discToggleAll(checked) {
       document.querySelectorAll('.disc-sug-check').forEach(cb => cb.checked = checked);
+    }
+
+    function _discFieldToggle(cb) {
+      const label = cb.closest('.disc-field-label');
+      if (!label) return;
+      if (cb.checked) {
+        label.style.background = '#1a1d2e';
+        label.style.borderColor = '#2e3460';
+        label.querySelector('.disc-field-name').style.color = '#a5b4fc';
+      } else {
+        label.style.background = '#16181f';
+        label.style.borderColor = '#22242c';
+        label.querySelector('.disc-field-name').style.color = '#52566b';
+      }
     }
 
     async function createDiscovered() {
