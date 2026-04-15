@@ -1261,7 +1261,7 @@ async def field_monitor_catalog(request: Request):
 
 @app.get("/api/bq-table-columns", include_in_schema=False)
 async def bq_table_columns(request: Request, table: str):
-    """Return column names for a given BQ table via INFORMATION_SCHEMA, using user's OAuth token."""
+    """Return flat schema for a BQ table (including nested STRUCT fields) using get_table()."""
     if not _user(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not table or "`" in table or ";" in table or len(table) > 300:
@@ -1271,52 +1271,32 @@ async def bq_table_columns(request: Request, table: str):
         raise HTTPException(status_code=400, detail="Expected project.dataset.table")
     project, dataset, tbl_name = parts
     from google.cloud import bigquery as _bq
-    from google.oauth2.credentials import Credentials
-    params = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
-    try:
+
+    def _get_client():
         access_token = request.session.get("access_token", "")
+        if access_token and _is_cloud:
+            from google.oauth2.credentials import Credentials
+            return _bq.Client(project=project, credentials=Credentials(token=access_token))
+        return bq.client
 
-        def _run_sql(sql):
-            if access_token and _is_cloud:
-                from google.oauth2.credentials import Credentials as _Creds
-                creds = _Creds(token=access_token)
-                client = _bq.Client(project=project, credentials=creds)
-                job_config = _bq.QueryJobConfig(query_parameters=params)
-                return [dict(r) for r in client.query(sql, job_config=job_config).result()]
-            return bq.run_query(sql, params=params, max_rows=500)
+    def _flatten(fields, prefix=""):
+        out = []
+        for f in fields:
+            path = f"{prefix}.{f.name}" if prefix else f.name
+            if f.field_type in ("RECORD", "STRUCT"):
+                out.extend(_flatten(f.fields, path))
+            else:
+                out.append({
+                    "name": path,
+                    "type": f.field_type,
+                    "description": f.description or "",
+                    "mode": f.mode,
+                })
+        return out
 
-        # Top-level columns (try with description, fall back without)
-        try:
-            sql = (
-                f"SELECT column_name, data_type, description "
-                f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
-                f"WHERE table_name = @tbl ORDER BY ordinal_position"
-            )
-            top_rows = _run_sql(sql)
-            top_cols = [{"name": r["column_name"], "type": r["data_type"], "description": r.get("description") or ""} for r in top_rows]
-        except Exception:
-            sql = (
-                f"SELECT column_name, data_type "
-                f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
-                f"WHERE table_name = @tbl ORDER BY ordinal_position"
-            )
-            top_rows = _run_sql(sql)
-            top_cols = [{"name": r["column_name"], "type": r["data_type"], "description": ""} for r in top_rows]
-
-        # Nested STRUCT sub-fields (STRING only) via COLUMN_FIELD_PATHS
-        try:
-            sql = (
-                f"SELECT field_path "
-                f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` "
-                f"WHERE table_name = @tbl AND data_type = 'STRING' AND field_path != column_name "
-                f"ORDER BY field_path"
-            )
-            nested_rows = _run_sql(sql)
-            nested_cols = [{"name": r["field_path"], "type": "STRING", "description": ""} for r in nested_rows]
-        except Exception:
-            nested_cols = []
-
-        return top_cols + nested_cols
+    try:
+        tbl = _get_client().get_table(f"{project}.{dataset}.{tbl_name}")
+        return _flatten(tbl.schema)
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 

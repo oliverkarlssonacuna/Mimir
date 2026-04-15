@@ -1957,25 +1957,42 @@
         }
         if (!payload.length) return;
 
-        // ── Phase 1: heuristic split (instant) ──────────────────────────────
-        const ID_HINTS   = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp', '_at', '_ts'];
+        // ── Phase 1: schema-based recommendation (instant, uses BQ field descriptions) ──
+        // get_table() returns all fields flat — STRUCTs already expanded, no STRUCT entries remain
         const stringCols = payload.filter(c => c.type === 'STRING');
-        // Hide top-level STRUCT columns — their sub-fields are shown individually
-        const nonStr     = payload.filter(c => c.type !== 'STRING' && !c.type.startsWith('STRUCT'));
+        const nonStr     = payload.filter(c => c.type !== 'STRING');
 
+        // Keywords in field description that strongly suggest enum/category columns
+        const DESC_GOOD = ['type', 'status', 'category', 'kind', 'role', 'tier', 'format',
+                           'mode', 'state', 'label', 'class', 'gender', 'nationality',
+                           'team', 'source', 'platform', 'version', 'name', 'code'];
+        // Keywords that suggest identifiers
+        const DESC_BAD  = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key', 'session id'];
+        // Name-based fallback (leaf segment of dotted path, e.g. "character.id" → "id")
+        const ID_HINTS  = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp', '_at', '_ts'];
         function isLikelyId(name) {
-          const n = name.toLowerCase();
-          return n === 'id' || n.endsWith('_id') || ID_HINTS.some(p => n.includes(p));
+          const leaf = name.split('.').pop().toLowerCase();
+          return leaf === 'id' || leaf.endsWith('_id') || ID_HINTS.some(p => leaf.includes(p));
+        }
+        function phase1Rec(col) {
+          const desc = (col.description || '').toLowerCase();
+          if (desc) {
+            if (DESC_BAD.some(w => desc.includes(w)))  return false;
+            if (DESC_GOOD.some(w => desc.includes(w))) return true;
+          }
+          return !isLikelyId(col.name);
         }
 
-        stringCols.filter(c => !isLikelyId(c.name)).forEach(col =>
-          recPills.appendChild(_makeFmPill(col, true, '⏳', `${col.name} · STRING · analysing…`))
-        );
-        stringCols.filter(c =>  isLikelyId(c.name)).forEach(col =>
-          othPills.appendChild(_makeFmPill(col, false, '⚠ ID', `${col.name} · STRING · Likely ID/timestamp`))
-        );
+        stringCols.forEach(col => {
+          const rec = phase1Rec(col);
+          const badge = col.description ? '📋' : '⏳';
+          const tip   = col.description
+            ? `${col.name} · STRING\n📋 ${col.description}`
+            : `${col.name} · STRING · analysing…`;
+          (rec ? recPills : othPills).appendChild(_makeFmPill(col, rec, badge, tip));
+        });
         nonStr.forEach(col => {
-          const baseType = col.type.replace(/\s*<.*/, '').trim(); // strip STRUCT<...> contents
+          const baseType = col.type.replace(/\s*<.*/, '').trim();
           othPills.appendChild(_makeFmPill(col, false, baseType, `${col.name} · ${baseType} · Not useful for field value monitoring`));
         });
 
@@ -2008,7 +2025,7 @@
           // Other columns: recommend if ≤50 distinct OR ratio < 80%
           // Sparse data (total < 20 rows): trust Phase 1 name heuristic only
           function isRec(col, d) {
-            if (d.total < 20 || d.distinct === 0) return null; // null = keep Phase 1
+            if (d.total < 100 || d.distinct === 0) return null; // null = keep Phase 1
             const nameIsId = isLikelyId(col.name);
             return nameIsId ? d.distinct <= 5 : (d.distinct <= 50 || d.ratio < 0.8);
           }
