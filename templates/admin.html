@@ -2100,25 +2100,42 @@
         grouped[s.bq_table].push({ ...s, _idx: i });
       });
 
-      container.innerHTML = Object.entries(grouped).map(([tbl, fields]) => `
-        <div class="rounded-lg border p-3 space-y-2" style="background:#13151a; border-color:#2a2d38;">
-          <p class="text-xs font-mono" style="color:#4f5668;">${escHtml(tbl)}</p>
+      container.innerHTML = Object.entries(grouped).map(([tbl, fields]) => {
+        const shortTbl = tbl.split('.').pop(); // just the table name
+        return `
+        <div class="rounded-lg border overflow-hidden" style="background:#13151a; border-color:#2a2d38;">
+          <div class="px-3 py-2 border-b" style="background:#171a21; border-color:#2a2d38;">
+            <p class="text-xs font-semibold" style="color:#c8cdd8;">${escHtml(shortTbl)}</p>
+            <p class="text-xs font-mono mt-0.5" style="color:#4f5668;">${escHtml(tbl)}</p>
+          </div>
+          <div class="p-3 space-y-2">
           ${fields.map(f => `
-            <label class="flex items-start gap-3 cursor-pointer">
+            <label class="flex items-start gap-3 cursor-pointer p-2 rounded" style="background:#1c1f27;">
               <input type="checkbox" class="disc-sug-check mt-0.5" data-idx="${f._idx}" checked
                 style="accent-color:#4f46e5;">
               <div>
-                <span class="text-sm font-medium" style="color:#c8cdd8;">${escHtml(f.field_name)}</span>
-                ${f.description ? `<span class="block text-xs mt-0.5" style="color:#6b7385;">📋 ${escHtml(f.description.slice(0, 120))}</span>` : ''}
+                <span class="text-sm font-mono font-medium" style="color:#818cf8;">${escHtml(f.field_name)}</span>
+                ${f.description ? `<span class="block text-xs mt-0.5" style="color:#9aa0b4;">📋 ${escHtml(f.description.slice(0, 140))}</span>` : ''}
                 <span class="block text-xs mt-0.5" style="color:#4f5668;">${f.distinct.toLocaleString()} distinct values over 60 days</span>
               </div>
             </label>`).join('')}
-        </div>`).join('');
+          </div>
+        </div>`;
+      }).join('');
 
       const n = suggestions.length;
       document.getElementById('disc-footer-info').textContent =
         `${n} suggestion${n !== 1 ? 's' : ''} across ${Object.keys(grouped).length} tables` +
         (errors.length ? ` · ${errors.length} failed` : '');
+
+      if (errors.length) {
+        const errDiv = document.createElement('div');
+        errDiv.className = 'rounded-lg border p-3 space-y-1';
+        errDiv.style.cssText = 'background:#2d1d20; border-color:#4a2020;';
+        errDiv.innerHTML = `<p class="text-xs font-semibold mb-1" style="color:#f87171;">⚠ ${errors.length} table${errors.length > 1 ? 's' : ''} failed:</p>` +
+          errors.map(e => `<p class="text-xs font-mono" style="color:#f87171;">${escHtml(e)}</p>`).join('');
+        container.appendChild(errDiv);
+      }
     }
 
     function _discToggleAll(checked) {

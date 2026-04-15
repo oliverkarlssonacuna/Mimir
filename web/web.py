@@ -1379,25 +1379,40 @@ async def discover_field_monitors(request: Request):
             if not string_fields:
                 continue
 
+            # Determine the actual partition field from table metadata
+            tp = tbl_obj.time_partitioning
+            if tp and tp.field:
+                date_field = tp.field          # e.g. "created_at", "event_date"
+                partition_cast = f"DATE(`{date_field}`)"
+            elif tp:
+                date_field = "_PARTITIONTIME"  # ingestion-time partitioned
+                partition_cast = "DATE(_PARTITIONTIME)"
+            else:
+                date_field = None              # not partitioned — no WHERE filter
+                partition_cast = None
+
             # 2. Latest partition with data (free metadata)
             latest_date = None
-            try:
-                part_rows = _exec(client,
-                    f"SELECT partition_id FROM `{project}.{dataset}.INFORMATION_SCHEMA.PARTITIONS` "
-                    f"WHERE table_name = @tbl AND partition_id NOT IN ('__NULL__','__UNPARTITIONED__') "
-                    f"AND total_rows > 0 ORDER BY partition_id DESC LIMIT 1",
-                    tbl_param)
-                if part_rows:
-                    raw = part_rows[0]["partition_id"]
-                    latest_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
-            except Exception:
-                pass
+            if date_field:
+                try:
+                    part_rows = _exec(client,
+                        f"SELECT partition_id FROM `{project}.{dataset}.INFORMATION_SCHEMA.PARTITIONS` "
+                        f"WHERE table_name = @tbl AND partition_id NOT IN ('__NULL__','__UNPARTITIONED__') "
+                        f"AND total_rows > 0 ORDER BY partition_id DESC LIMIT 1",
+                        tbl_param)
+                    if part_rows:
+                        raw = part_rows[0]["partition_id"]
+                        latest_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+                except Exception:
+                    pass
 
-            if latest_date:
-                where = (f"WHERE `{date_field}` BETWEEN "
+            if latest_date and partition_cast:
+                where = (f"WHERE {partition_cast} BETWEEN "
                          f"DATE_SUB('{latest_date}', INTERVAL 60 DAY) AND '{latest_date}'")
+            elif partition_cast:
+                where = f"WHERE {partition_cast} >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)"
             else:
-                where = f"WHERE `{date_field}` >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)"
+                where = ""  # unpartitioned — full scan (small tables only)
 
             # 3. APPROX_COUNT_DISTINCT for all string fields in one query
             aliases = [f"_c{i}_" for i in range(len(string_fields))]
@@ -1438,7 +1453,7 @@ async def discover_field_monitors(request: Request):
                     "label": f"{tbl_label} · {name.split('.')[-1]}",
                     "bq_table": tbl_full,
                     "field_name": name,
-                    "date_field": date_field,
+                    "date_field": date_field or "partition_date",
                     "distinct": distinct,
                     "total": total,
                     "description": desc,
