@@ -1329,9 +1329,6 @@ async def discover_field_monitors(request: Request):
         cfg = _bq.QueryJobConfig(query_parameters=params or [])
         return [dict(r) for r in client.query(sql, job_config=cfg).result()]
 
-    DESC_BAD = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key',
-                'session id', 'url', 'image', 'path', 'link', 'first name',
-                'last name', 'display name', 'full name']
     ID_HINTS = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp',
                 '_at', '_ts', '_url', '_image', '_link', '_path']
 
@@ -1339,14 +1336,16 @@ async def discover_field_monitors(request: Request):
         leaf = name.split('.')[-1].lower()
         return leaf == 'id' or leaf.endswith('_id') or any(h in leaf for h in ID_HINTS)
 
-    def _schema_rec(description: str, name: str) -> bool | None:
-        """True=recommended, False=not, None=unknown (use cardinality)"""
-        if description:
-            desc = description.lower()
-            if any(w in desc for w in DESC_BAD):
-                return False
-            return True  # has description and not bad → trust it
-        return None  # no description → decide by cardinality
+    def _recommend(distinct: int, total: int, name: str) -> bool:
+        """Data-driven recommendation. Cardinality is the primary signal."""
+        if distinct == 0:
+            return False                          # all NULL
+        if distinct <= 50:
+            return True                           # clear low-cardinality enum
+        ratio = distinct / total if total else 1
+        if distinct <= 200 and ratio < 0.05:
+            return not _is_id_name(name)          # medium cardinality — ok unless ID-like name
+        return False                              # high cardinality
 
     def _flatten_strings(fields, prefix="", array_parent=None):
         """Flatten schema fields to a list of {name, description, array_parent}.
@@ -1494,17 +1493,7 @@ async def discover_field_monitors(request: Request):
                 desc = field["description"]
                 name = field["name"]
 
-                schema_rec = _schema_rec(desc, name)
-                if schema_rec is True:
-                    rec = distinct > 0
-                elif schema_rec is False:
-                    rec = False
-                else:
-                    # No description: use cardinality
-                    if distinct == 0:
-                        rec = False
-                    else:
-                        rec = (distinct <= 50 or ratio < 0.1) and not _is_id_name(name)
+                rec = _recommend(distinct, total, name)
 
                 suggestions.append({
                     "label": f"{tbl_label} · {name.split('>')[-1].split('.')[-1]}",
