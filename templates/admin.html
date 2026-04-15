@@ -1963,27 +1963,28 @@
         const stringCols = payload.filter(c => c.type === 'STRING');
         const nonStr     = payload.filter(c => c.type !== 'STRING');
 
-        // Keywords in field description that strongly suggest enum/category columns
-        const DESC_GOOD = ['type', 'status', 'category', 'kind', 'role', 'tier', 'format',
-                           'mode', 'state', 'label', 'class', 'gender', 'nationality',
-                           'team', 'source', 'platform', 'version', 'code'];
-        // Keywords that suggest identifiers or high-cardinality strings
+        // "Values: X, Y, Z" in description = definitive enum → always Recommended
+        const DESC_ENUM = /values?\s*:/i;
+        // Description keywords that indicate high-cardinality/identifier → Not recommended
         const DESC_BAD  = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key',
                            'session id', 'url', 'image', 'path', 'link', 'first name',
                            'last name', 'display name', 'full name'];
-        // Name-based fallback (leaf segment of dotted path, e.g. "character.card_image.url" → "url")
+        // Name-based fallback (only used when column has NO description)
         const ID_HINTS  = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp',
-                           '_at', '_ts', '_url', '_name', '_image', '_link', '_path'];
+                           '_at', '_ts', '_url', '_image', '_link', '_path'];
         function isLikelyId(name) {
           const leaf = name.split('.').pop().toLowerCase();
           return leaf === 'id' || leaf.endsWith('_id') || ID_HINTS.some(p => leaf.includes(p));
         }
         function phase1Rec(col) {
           const desc = (col.description || '').toLowerCase();
-          if (desc) {
+          if (col.description) {
+            // Has a description — trust it. Bad signals = Not recommended, everything else = Recommended.
+            if (DESC_ENUM.test(col.description))       return true;
             if (DESC_BAD.some(w => desc.includes(w)))  return false;
-            if (DESC_GOOD.some(w => desc.includes(w))) return true;
+            return true; // description exists but no bad signal → Recommended
           }
+          // No description — fall back to name heuristic
           return !isLikelyId(col.name);
         }
 
