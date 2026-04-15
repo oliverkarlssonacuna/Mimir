@@ -1272,26 +1272,36 @@ async def bq_table_columns(request: Request, table: str):
     project, dataset, tbl_name = parts
     from google.cloud import bigquery as _bq
     from google.oauth2.credentials import Credentials
-    sql = (
-        f"SELECT column_name, data_type, description "
-        f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
-        f"WHERE table_name = @tbl "
-        f"ORDER BY ordinal_position"
-    )
     params = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
     try:
         access_token = request.session.get("access_token", "")
-        if access_token and _is_cloud:
-            creds = Credentials(token=access_token)
-            user_bq = _bq.Client(project=project, credentials=creds)
-            job_config = _bq.QueryJobConfig(query_parameters=params)
-            job = user_bq.query(sql, job_config=job_config)
-            rows = list(job.result())
-            return [{"name": r["column_name"], "type": r["data_type"], "description": r["description"] or ""} for r in rows]
-        else:
-            # Local dev — use default service account
-            rows = bq.run_query(sql, params=params, max_rows=500)
+
+        def _run_sql(sql):
+            if access_token and _is_cloud:
+                from google.oauth2.credentials import Credentials as _Creds
+                creds = _Creds(token=access_token)
+                client = _bq.Client(project=project, credentials=creds)
+                job_config = _bq.QueryJobConfig(query_parameters=params)
+                return [dict(r) for r in client.query(sql, job_config=job_config).result()]
+            return bq.run_query(sql, params=params, max_rows=500)
+
+        # Try with description column first; fall back if not supported
+        try:
+            sql = (
+                f"SELECT column_name, data_type, description "
+                f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
+                f"WHERE table_name = @tbl ORDER BY ordinal_position"
+            )
+            rows = _run_sql(sql)
             return [{"name": r["column_name"], "type": r["data_type"], "description": r.get("description") or ""} for r in rows]
+        except Exception:
+            sql = (
+                f"SELECT column_name, data_type "
+                f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
+                f"WHERE table_name = @tbl ORDER BY ordinal_position"
+            )
+            rows = _run_sql(sql)
+            return [{"name": r["column_name"], "type": r["data_type"], "description": ""} for r in rows]
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
