@@ -1273,7 +1273,7 @@ async def bq_table_columns(request: Request, table: str):
     from google.cloud import bigquery as _bq
     from google.oauth2.credentials import Credentials
     sql = (
-        f"SELECT column_name, data_type "
+        f"SELECT column_name, data_type, description "
         f"FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
         f"WHERE table_name = @tbl "
         f"ORDER BY ordinal_position"
@@ -1287,11 +1287,11 @@ async def bq_table_columns(request: Request, table: str):
             job_config = _bq.QueryJobConfig(query_parameters=params)
             job = user_bq.query(sql, job_config=job_config)
             rows = list(job.result())
-            return [{"name": r["column_name"], "type": r["data_type"]} for r in rows]
+            return [{"name": r["column_name"], "type": r["data_type"], "description": r["description"] or ""} for r in rows]
         else:
             # Local dev — use default service account
             rows = bq.run_query(sql, params=params, max_rows=500)
-            return [{"name": r["column_name"], "type": r["data_type"]} for r in rows]
+            return [{"name": r["column_name"], "type": r["data_type"], "description": r.get("description") or ""} for r in rows]
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 

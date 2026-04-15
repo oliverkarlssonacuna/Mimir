@@ -1907,8 +1907,9 @@
       btn.style.cssText = recommended
         ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
         : 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
-      const shortType = col.type.length > 40 ? col.type.slice(0, 40) + '…' : col.type;
-      btn.title = (tooltip || `${col.name} (${shortType})`).slice(0, 160);
+      const shortType = col.type.length > 40 ? col.type.replace(/\s*<.*/, '').trim() : col.type;
+      const descLine = col.description ? `\n📋 ${col.description.slice(0, 100)}` : '';
+      btn.title = ((tooltip || `${col.name} (${shortType})`) + descLine).slice(0, 220);
       btn.innerHTML = `<span>${escHtml(col.name)}</span>${badge ? `<span style="font-size:10px;opacity:0.55;">${escHtml(badge)}</span>` : ''}`;
       btn.onmouseover = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#252b45' : '#1c1f27'; };
       btn.onmouseout  = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#1a1f35' : '#13151a'; };
@@ -1997,22 +1998,24 @@
           }
           function makeTip(col, d) {
             const pct = Math.round(d.ratio * 100);
-            const nameId = isLikelyId(col.name);
-            const line3 = nameId
-              ? '⚠ ID/timestamp column — not useful for monitoring'
+            const nameIsId = isLikelyId(col.name);
+            const rec = d.distinct > 0 && (d.distinct <= 50 || (!nameIsId && d.ratio < 0.8));
+            const line3 = rec
+              ? '✓ Good candidate for field monitoring'
               : d.distinct === 0
                 ? '⚠ No data found for this date'
-                : d.ratio < 0.8
-                  ? '✓ Good candidate for field monitoring'
-                  : '⚠ High cardinality — likely not useful for monitoring';
-            return `${col.name} · STRING\n${d.distinct.toLocaleString()} distinct / ${d.total.toLocaleString()} total (~${pct}% unique)\n${line3}`;
+                : '⚠ High cardinality — likely not useful for monitoring';
+            const descLine = col.description ? `\n📋 ${col.description.slice(0, 100)}` : '';
+            return `${col.name} · STRING\n${d.distinct.toLocaleString()} distinct / ${d.total.toLocaleString()} total (~${pct}% unique)\n${line3}${descLine}`;
           }
 
           for (const col of stringCols) {
             const d = analysis[col.name];
             if (!d) continue;
             const nameIsId = isLikelyId(col.name);
-            const rec = !nameIsId && d.ratio < 0.8 && d.distinct > 0;
+            // ≤50 distinct = enum-like → always recommended (overrides name heuristic).
+            // >50 distinct: use ratio, but never recommend pure ID columns.
+            const rec = d.distinct > 0 && (d.distinct <= 50 || (!nameIsId && d.ratio < 0.8));
             const tip = makeTip(col, d).slice(0, 160);
             const badge = badgeText(d);
 
