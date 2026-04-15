@@ -2004,14 +2004,21 @@
               ? `${d.distinct} vals`
               : `~${Math.round(d.ratio * 100)}% uniq`;
           }
+          // ID-named columns: only recommend if ≤5 distinct (true enum like steam_app_id)
+          // Other columns: recommend if ≤50 distinct OR ratio < 80%
+          // Sparse data (total < 20 rows): trust Phase 1 name heuristic only
+          function isRec(col, d) {
+            if (d.total < 20 || d.distinct === 0) return null; // null = keep Phase 1
+            const nameIsId = isLikelyId(col.name);
+            return nameIsId ? d.distinct <= 5 : (d.distinct <= 50 || d.ratio < 0.8);
+          }
           function makeTip(col, d) {
             const pct = Math.round(d.ratio * 100);
-            const nameIsId = isLikelyId(col.name);
-            const rec = d.distinct > 0 && (d.distinct <= 50 || (!nameIsId && d.ratio < 0.8));
-            const line3 = rec
-              ? '✓ Good candidate for field monitoring'
-              : d.distinct === 0
-                ? '⚠ No data found for this date'
+            const rec = isRec(col, d);
+            const line3 = rec === null
+              ? '⚠ Too little data — using name heuristic'
+              : rec
+                ? '✓ Good candidate for field monitoring'
                 : '⚠ High cardinality — likely not useful for monitoring';
             const descLine = col.description ? `\n📋 ${col.description.slice(0, 100)}` : '';
             return `${col.name} · STRING\n${d.distinct.toLocaleString()} distinct / ${d.total.toLocaleString()} total (~${pct}% unique)\n${line3}${descLine}`;
@@ -2021,21 +2028,17 @@
             const d = analysis[col.name];
             if (!d) continue;
 
-            // If query returned no rows (empty partition), keep Phase 1 heuristic
-            if (d.total === 0) {
+            const rec = isRec(col, d);
+            // null = too sparse or no data → keep Phase 1, just update badge
+            if (rec === null) {
               const existing = wrap.querySelector(`button[data-col="${CSS.escape(col.name)}"]`);
               if (existing) {
                 const badgeSpan = existing.querySelector('span:last-child');
-                if (badgeSpan) badgeSpan.textContent = 'no data';
-                existing.title = `${col.name} · STRING\n⚠ No data found for this partition — using name heuristic`;
+                if (badgeSpan) badgeSpan.textContent = d.total === 0 ? 'no data' : `${d.distinct} vals*`;
+                existing.title = makeTip(col, d).slice(0, 220);
               }
               continue;
             }
-
-            const nameIsId = isLikelyId(col.name);
-            // ≤50 distinct = enum-like → always recommended (overrides name heuristic).
-            // >50 distinct: use ratio, but never recommend pure ID columns.
-            const rec = d.distinct > 0 && (d.distinct <= 50 || (!nameIsId && d.ratio < 0.8));
             const tip = makeTip(col, d).slice(0, 160);
             const badge = badgeText(d);
 
