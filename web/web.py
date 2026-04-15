@@ -1370,6 +1370,8 @@ async def analyze_bq_table_columns(request: Request, table: str, date_field: str
         except Exception:
             nested_cols = []
         string_cols = string_cols + nested_cols
+        # Cap to avoid overly large queries
+        string_cols = string_cols[:60]
         if not string_cols:
             return {}
 
@@ -1381,18 +1383,19 @@ async def analyze_bq_table_columns(request: Request, table: str, date_field: str
             for c, a in zip(string_cols, aliases)
         )
 
+        # Try yesterday first, fall back to last 7 days — never do a full table scan
         rows = None
-        for with_filter in (True, False):
+        for where in [
+            f"WHERE `{date_field}` = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)",
+            f"WHERE `{date_field}` >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)",
+        ]:
             try:
-                where = (
-                    f"WHERE `{date_field}` = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)"
-                    if with_filter else ""
-                )
-                rows = _exec(f"SELECT COUNT(*) AS _total, {approx_parts} FROM `{table}` {where}")
-                break
+                result = _exec(f"SELECT COUNT(*) AS _total, {approx_parts} FROM `{table}` {where}")
+                if result and int(result[0].get("_total") or 0) > 0:
+                    rows = result
+                    break
             except Exception:
-                if not with_filter:
-                    raise
+                continue
 
         if not rows:
             return {}

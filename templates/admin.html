@@ -1960,7 +1960,8 @@
         // ── Phase 1: heuristic split (instant) ──────────────────────────────
         const ID_HINTS   = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp', '_at', '_ts'];
         const stringCols = payload.filter(c => c.type === 'STRING');
-        const nonStr     = payload.filter(c => c.type !== 'STRING');
+        // Hide top-level STRUCT columns — their sub-fields are shown individually
+        const nonStr     = payload.filter(c => c.type !== 'STRING' && !c.type.startsWith('STRUCT'));
 
         function isLikelyId(name) {
           const n = name.toLowerCase();
@@ -1986,7 +1987,14 @@
         // ── Phase 2: APPROX uniqueness analysis (non-blocking, updates in-place) ──
         if (!stringCols.length) return;
         try {
-          const ra = await fetch(`/api/bq-table-columns/analyze?table=${encodeURIComponent(bqTable)}`);
+          const ctrl = new AbortController();
+          const timer = setTimeout(() => ctrl.abort(), 20000);
+          let ra;
+          try {
+            ra = await fetch(`/api/bq-table-columns/analyze?table=${encodeURIComponent(bqTable)}`, { signal: ctrl.signal });
+          } finally {
+            clearTimeout(timer);
+          }
           analyzing.classList.add('hidden');
           if (!ra.ok) return;
           const analysis = await ra.json();
