@@ -2111,29 +2111,57 @@
       container.innerHTML = Object.entries(grouped).map(([tbl, { rec, notRec }]) => {
         const shortTbl = tbl.split('.').pop();
         const renderField = (f, checked) => `
-          <label class="flex items-start gap-3 cursor-pointer p-2 rounded" style="background:#1c1f27;">
-            <input type="checkbox" class="disc-sug-check mt-0.5" data-idx="${f._idx}" ${checked ? 'checked' : ''}
+          <label class="flex items-start gap-3 cursor-pointer p-2 rounded" style="background:${checked ? '#1a1d2e' : '#16181f'}; border:1px solid ${checked ? '#2e3460' : '#22242c'};">
+            <input type="checkbox" class="disc-sug-check mt-0.5 shrink-0" data-idx="${f._idx}" ${checked ? 'checked' : ''}
               style="accent-color:#4f46e5;">
-            <div>
-              <span class="text-sm font-mono font-medium" style="color:${checked ? '#818cf8' : '#6b7385'};">${escHtml(f.field_name)}</span>
-              ${f.is_array ? `<span class="ml-1.5 text-xs px-1.5 py-0.5 rounded" style="background:#2d2a1a;color:#fbbf24;border:1px solid #4a3f10;">ARRAY</span>` : ''}
-              ${f.description ? `<span class="block text-xs mt-0.5" style="color:#9aa0b4;">📋 ${escHtml(f.description.slice(0, 140))}</span>` : ''}
-              <span class="block text-xs mt-0.5" style="color:#4f5668;">${f.distinct === 0 ? 'No data (all NULL)' : f.distinct <= 200 ? f.distinct.toLocaleString() + ' distinct values' : f.distinct.toLocaleString() + ' distinct (' + Math.round(f.distinct / f.total * 100) + '% unique)'}</span>
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
+                <span class="text-sm font-mono font-medium" style="color:${checked ? '#a5b4fc' : '#52566b'};">${escHtml(f.field_name)}</span>
+                ${f.is_array ? `<span class="text-xs px-1.5 py-0.5 rounded" style="background:#2d2a1a;color:#fbbf24;border:1px solid #4a3f10;">ARRAY</span>` : ''}
+              </div>
+              ${f.description ? `<span class="block text-xs mt-0.5" style="color:${checked ? '#8b95b8' : '#474c60'};">📋 ${escHtml(f.description.slice(0, 140))}</span>` : ''}
+              <span class="block text-xs mt-0.5" style="color:${checked ? '#4f5a80' : '#363944'};">${f.distinct === 0 ? 'No data (all NULL)' : f.distinct <= 200 ? f.distinct.toLocaleString() + ' distinct values' : f.distinct.toLocaleString() + ' distinct (' + Math.round(f.distinct / f.total * 100) + '% unique)'}</span>
             </div>
           </label>`;
+
+        const recCount = rec.length;
+        const notRecCount = notRec.length;
         return `
-        <div class="rounded-lg border overflow-hidden" style="background:#13151a; border-color:#2a2d38;">
-          <div class="px-3 py-2 border-b" style="background:#171a21; border-color:#2a2d38;">
-            <p class="text-xs font-semibold" style="color:#c8cdd8;">${escHtml(shortTbl)}</p>
-            <p class="text-xs font-mono mt-0.5" style="color:#4f5668;">${escHtml(tbl)}</p>
+        <div class="rounded-lg overflow-hidden" style="border:1px solid #2a2d38;">
+          <!-- Table header -->
+          <div class="px-4 py-3" style="background:#1a1d28; border-bottom:2px solid #3730a3;">
+            <div class="flex items-center justify-between">
+              <div>
+                <span class="text-sm font-bold" style="color:#e2e8f0;">${escHtml(shortTbl)}</span>
+                <span class="ml-2 text-xs px-2 py-0.5 rounded-full" style="background:#1e2035;color:#818cf8;border:1px solid #3730a3;">${recCount} recommended · ${notRecCount} skipped</span>
+              </div>
+              <span class="text-xs font-mono" style="color:#3d4160;">${escHtml(tbl.split('.').slice(0,2).join('.'))}</span>
+            </div>
           </div>
-          <div class="p-3 space-y-2">
-            ${rec.length ? rec.map(f => renderField(f, true)).join('') : ''}
-            ${notRec.length ? `
-              <p class="text-xs font-semibold mt-2 mb-1" style="color:#4f5668;">Not recommended</p>
+
+          ${rec.length ? `
+          <!-- Recommended section -->
+          <div style="background:#13151f;">
+            <div class="px-4 py-1.5 flex items-center gap-2" style="background:#161926; border-bottom:1px solid #1e2235;">
+              <span class="text-xs font-semibold uppercase tracking-wider" style="color:#4f46e5;">✓ Recommended</span>
+              <span class="text-xs" style="color:#374168;">${recCount} field${recCount !== 1 ? 's' : ''}</span>
+            </div>
+            <div class="p-3 space-y-1.5">
+              ${rec.map(f => renderField(f, true)).join('')}
+            </div>
+          </div>` : ''}
+
+          ${notRec.length ? `
+          <!-- Not recommended section -->
+          <div style="background:#111318; border-top:1px solid #1e2030;">
+            <div class="px-4 py-1.5 flex items-center gap-2" style="background:#13151a; border-bottom:1px solid #1c1e28;">
+              <span class="text-xs font-semibold uppercase tracking-wider" style="color:#374168;">✗ Skipped by default</span>
+              <span class="text-xs" style="color:#2a2e3d;">${notRecCount} field${notRecCount !== 1 ? 's' : ''}</span>
+            </div>
+            <div class="p-3 space-y-1.5">
               ${notRec.map(f => renderField(f, false)).join('')}
-            ` : ''}
-          </div>
+            </div>
+          </div>` : ''}
         </div>`;
       }).join('');
 
