@@ -1965,11 +1965,14 @@
         // Keywords in field description that strongly suggest enum/category columns
         const DESC_GOOD = ['type', 'status', 'category', 'kind', 'role', 'tier', 'format',
                            'mode', 'state', 'label', 'class', 'gender', 'nationality',
-                           'team', 'source', 'platform', 'version', 'name', 'code'];
-        // Keywords that suggest identifiers
-        const DESC_BAD  = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key', 'session id'];
-        // Name-based fallback (leaf segment of dotted path, e.g. "character.id" → "id")
-        const ID_HINTS  = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp', '_at', '_ts'];
+                           'team', 'source', 'platform', 'version', 'code'];
+        // Keywords that suggest identifiers or high-cardinality strings
+        const DESC_BAD  = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key',
+                           'session id', 'url', 'image', 'path', 'link', 'first name',
+                           'last name', 'display name', 'full name'];
+        // Name-based fallback (leaf segment of dotted path, e.g. "character.card_image.url" → "url")
+        const ID_HINTS  = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp',
+                           '_at', '_ts', '_url', '_name', '_image', '_link', '_path'];
         function isLikelyId(name) {
           const leaf = name.split('.').pop().toLowerCase();
           return leaf === 'id' || leaf.endsWith('_id') || ID_HINTS.some(p => leaf.includes(p));

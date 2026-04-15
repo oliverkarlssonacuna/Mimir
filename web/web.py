@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Mimir Admin", docs_url=None, redoc_url=None)
 
+# Simple in-memory cache for column cardinality analysis (2h TTL per table)
+_analyze_cache: dict[str, tuple[float, dict]] = {}  # key -> (timestamp, result)
+_ANALYZE_CACHE_TTL = 7200  # seconds
+
 _session_secret = os.environ.get("SESSION_SECRET")
 
 if not _session_secret:
@@ -1303,10 +1307,16 @@ async def bq_table_columns(request: Request, table: str):
 @app.get("/api/bq-table-columns/analyze", include_in_schema=False)
 async def analyze_bq_table_columns(request: Request, table: str, date_field: str = "partition_date"):
     """Run APPROX_COUNT_DISTINCT on STRING columns to estimate uniqueness ratio."""
+    import time as _time
     if not _user(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
     if not table or "`" in table or ";" in table or len(table) > 300:
         raise HTTPException(status_code=400, detail="Invalid table name")
+
+    cache_key = f"{table}:{date_field}"
+    cached = _analyze_cache.get(cache_key)
+    if cached and (_time.time() - cached[0]) < _ANALYZE_CACHE_TTL:
+        return cached[1]
     parts = table.split(".")
     if len(parts) != 3:
         raise HTTPException(status_code=400, detail="Expected project.dataset.table")
@@ -1382,7 +1392,7 @@ async def analyze_bq_table_columns(request: Request, table: str, date_field: str
 
         row = rows[0]
         total = int(row.get("_total") or 1)
-        return {
+        result = {
             c: {
                 "distinct": int(row.get(a) or 0),
                 "total": total,
@@ -1390,6 +1400,9 @@ async def analyze_bq_table_columns(request: Request, table: str, date_field: str
             }
             for c, a in zip(string_cols, aliases)
         }
+        import time as _time
+        _analyze_cache[cache_key] = (_time.time(), result)
+        return result
     except Exception as e:
         logger.warning("Column analysis failed for %s: %s", table, e)
         raise HTTPException(status_code=500, detail=str(e))
