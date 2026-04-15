@@ -1970,30 +1970,25 @@
           recPills.appendChild(_makeFmPill(col, true, '⏳', `${col.name} · STRING · analysing…`))
         );
         stringCols.filter(c =>  isLikelyId(c.name)).forEach(col =>
-          othPills.appendChild(_makeFmPill(col, false, '⚠', `${col.name} · STRING · Likely ID/timestamp`))
+          othPills.appendChild(_makeFmPill(col, false, '⚠ ID', `${col.name} · STRING · Likely ID/timestamp`))
         );
-        nonStr.forEach(col =>
-          othPills.appendChild(_makeFmPill(col, false, col.type, `${col.name} · ${col.type} · Not useful for field value monitoring`))
-        );
+        nonStr.forEach(col => {
+          const baseType = col.type.replace(/\s*<.*/, '').trim(); // strip STRUCT<...> contents
+          othPills.appendChild(_makeFmPill(col, false, baseType, `${col.name} · ${baseType} · Not useful for field value monitoring`));
+        });
 
         if (recPills.children.length)  recSec.classList.remove('hidden');
         if (othPills.children.length)  otherSec.classList.remove('hidden');
         wrap.classList.remove('hidden');
         if (stringCols.length) analyzing.classList.remove('hidden');
 
-        // ── Phase 2: APPROX uniqueness analysis (non-blocking) ──────────────
+        // ── Phase 2: APPROX uniqueness analysis (non-blocking, updates in-place) ──
         if (!stringCols.length) return;
         try {
           const ra = await fetch(`/api/bq-table-columns/analyze?table=${encodeURIComponent(bqTable)}`);
           analyzing.classList.add('hidden');
           if (!ra.ok) return;
           const analysis = await ra.json();
-
-          // Remove existing STRING pills from both sections
-          recPills.querySelectorAll('button[data-col]').forEach(b => b.remove());
-          othPills.querySelectorAll('button[data-col]').forEach(b => {
-            if (stringCols.find(c => c.name === b.dataset.col)) b.remove();
-          });
 
           function badgeText(d) {
             return d.distinct <= 50
@@ -2016,10 +2011,29 @@
           for (const col of stringCols) {
             const d = analysis[col.name];
             if (!d) continue;
-            // Name heuristic overrides data — IDs are never useful regardless of ratio
             const nameIsId = isLikelyId(col.name);
             const rec = !nameIsId && d.ratio < 0.8 && d.distinct > 0;
-            (rec ? recPills : othPills).appendChild(_makeFmPill(col, rec, badgeText(d), makeTip(col, d)));
+            const tip = makeTip(col, d).slice(0, 160);
+            const badge = badgeText(d);
+
+            // Update pill in-place instead of removing and re-adding
+            const existing = wrap.querySelector(`button[data-col="${CSS.escape(col.name)}"]`);
+            if (existing) {
+              const badgeSpan = existing.querySelector('span:last-child');
+              if (badgeSpan) badgeSpan.textContent = badge;
+              existing.title = tip;
+              // Move between sections only if recommendation changed
+              const inRec = !!existing.closest('#fm-rec-pills');
+              if (rec && !inRec) {
+                existing.style.cssText = 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;';
+                recPills.appendChild(existing);
+              } else if (!rec && inRec) {
+                existing.style.cssText = 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
+                othPills.appendChild(existing);
+              }
+            } else {
+              (rec ? recPills : othPills).appendChild(_makeFmPill(col, rec, badge, tip));
+            }
           }
 
           recSec.classList.toggle('hidden',  !recPills.children.length);
