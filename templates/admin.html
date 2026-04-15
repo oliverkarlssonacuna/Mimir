@@ -760,14 +760,21 @@
             <p id="fm-columns-loading" class="hidden text-xs mt-2" style="color:#6b7385;">Loading columns…</p>
             <div id="fm-cols-wrap" class="hidden mt-2 space-y-2">
               <div id="fm-rec-section" class="hidden">
-                <p class="text-xs font-semibold mb-1.5" style="color:#34d399;">✦ Recommended</p>
+                <div class="flex items-center justify-between mb-1.5">
+                  <p class="text-xs font-semibold" style="color:#34d399;">✦ Recommended</p>
+                  <button onclick="_selectAllRec()" class="text-xs px-2 py-0.5 rounded" style="background:#1a2b22;color:#34d399;border:1px solid #1e3a2a;">Add all</button>
+                </div>
                 <div id="fm-rec-pills" class="flex flex-wrap gap-1.5"></div>
               </div>
               <div id="fm-other-section" class="hidden">
-                <p class="text-xs font-semibold mb-1.5 mt-2" style="color:#4f5668;">Not recommended</p>
+                <p class="text-xs font-semibold mb-1.5 mt-2" style="color:#6b7385;">Not recommended</p>
                 <div id="fm-other-pills" class="flex flex-wrap gap-1.5"></div>
               </div>
               <p id="fm-analyzing" class="hidden text-xs" style="color:#6b7385;">⏳ Analysing uniqueness…</p>
+              <div id="fm-selected-wrap" class="hidden mt-2">
+                <p class="text-xs font-semibold mb-1" style="color:#9aa0b4;">Selected fields</p>
+                <div id="fm-selected-chips" class="flex flex-wrap gap-1.5"></div>
+              </div>
             </div>
           </div>
           <div>
@@ -1819,6 +1826,8 @@
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
       document.getElementById('fm-rec-pills').innerHTML = '';
       document.getElementById('fm-other-pills').innerHTML = '';
+      document.getElementById('fm-selected-chips').innerHTML = '';
+      document.getElementById('fm-selected-wrap').classList.add('hidden');
       document.getElementById('fm-cols-wrap').classList.add('hidden');
       document.getElementById('fm-rec-section').classList.add('hidden');
       document.getElementById('fm-other-section').classList.add('hidden');
@@ -1906,27 +1915,43 @@
       btn.className = 'inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded font-mono transition-all';
       btn.style.cssText = recommended
         ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
-        : 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
+        : 'background:#1c1f2b; color:#6b7385; border:1px solid #2a2d38;';
       const shortType = col.type.length > 40 ? col.type.replace(/\s*<.*/, '').trim() : col.type;
       const base = tooltip || `${col.name} (${shortType})`;
       const descLine = col.description && !base.includes('📋') ? `\n📋 ${col.description.slice(0, 100)}` : '';
       btn.title = (base + descLine).slice(0, 220);
       btn.innerHTML = `<span>${escHtml(col.name)}</span>${badge ? `<span style="font-size:10px;opacity:0.55;">${escHtml(badge)}</span>` : ''}`;
-      btn.onmouseover = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#252b45' : '#1c1f27'; };
-      btn.onmouseout  = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#1a1f35' : '#13151a'; };
-      btn.onclick = () => {
-        document.getElementById('fm-field-name').value = col.name;
-        document.querySelectorAll('#fm-rec-pills button, #fm-other-pills button').forEach(b => {
-          delete b.dataset.sel;
-          const inRec = !!b.closest('#fm-rec-pills');
-          b.style.cssText = inRec
-            ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
-            : 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
-        });
+      btn.onmouseover = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#252b45' : '#252836'; };
+      btn.onmouseout  = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#1a1f35' : '#1c1f2b'; };
+      btn.onclick = () => _toggleFmPill(btn, col.name);
+      return btn;
+    }
+
+    function _toggleFmPill(btn, colName) {
+      if (btn.dataset.sel) {
+        delete btn.dataset.sel;
+        const inRec = !!btn.closest('#fm-rec-pills');
+        btn.style.cssText = inRec
+          ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
+          : 'background:#1c1f2b; color:#6b7385; border:1px solid #2a2d38;';
+      } else {
         btn.dataset.sel = '1';
         btn.style.cssText = 'background:#312e81; color:#fff; border:1px solid #4f46e5;';
-      };
-      return btn;
+      }
+      _syncFmSelectedChips();
+    }
+
+    function _syncFmSelectedChips() {
+      const selected = [...document.querySelectorAll('#fm-rec-pills button[data-sel], #fm-other-pills button[data-sel]')]
+        .map(b => b.dataset.col);
+      const wrap = document.getElementById('fm-selected-wrap');
+      const chips = document.getElementById('fm-selected-chips');
+      chips.innerHTML = selected.map(c =>
+        `<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded font-mono" style="background:#312e81;color:#fff;border:1px solid #4f46e5;">${escHtml(c)}</span>`
+      ).join('');
+      wrap.classList.toggle('hidden', selected.length === 0);
+      // also update the legacy single-field input for backend compat
+      document.getElementById('fm-field-name').value = selected[0] || '';
     }
 
     async function loadFmColumns(bqTable) {
@@ -2030,7 +2055,8 @@
           // Other columns: recommend if ≤50 distinct OR ratio < 80%
           // Sparse data (total < 20 rows): trust Phase 1 name heuristic only
           function isRec(col, d) {
-            if (d.total < 100 || d.distinct === 0) return null; // null = keep Phase 1
+            if (d.total < 100) return null;          // too little data → keep Phase 1
+            if (d.distinct === 0) return false;       // all NULL → never useful
             const nameIsId = isLikelyId(col.name);
             return nameIsId ? d.distinct <= 5 : (d.distinct <= 50 || d.ratio < 0.8);
           }
@@ -2038,10 +2064,12 @@
             const pct = Math.round(d.ratio * 100);
             const rec = isRec(col, d);
             const line3 = rec === null
-              ? '⚠ Too little data — using name heuristic'
+              ? '⚠ Too little data — using schema heuristic'
               : rec
                 ? '✓ Good candidate for field monitoring'
-                : '⚠ High cardinality — likely not useful for monitoring';
+                : d.distinct === 0
+                  ? '⚠ All values are NULL — not useful for monitoring'
+                  : '⚠ High cardinality — likely not useful for monitoring';
             const descLine = col.description ? `\n📋 ${col.description.slice(0, 100)}` : '';
             return `${col.name} · STRING\n${d.distinct.toLocaleString()} distinct / ${d.total.toLocaleString()} total (~${pct}% unique)\n${line3}${descLine}`;
           }
@@ -2051,16 +2079,17 @@
             if (!d) continue;
 
             const rec = isRec(col, d);
-            // null = too sparse or no data → keep Phase 1, just update badge
+            // null = too little data → keep Phase 1 placement
+            // description columns: keep placement UNLESS all values are NULL (rec === false && distinct === 0)
             if (rec === null) {
               const existing = wrap.querySelector(`button[data-col="${CSS.escape(col.name)}"]`);
-              if (existing) {
+              if (existing && !col.description) {
                 const badgeSpan = existing.querySelector('span:last-child');
-                if (badgeSpan) badgeSpan.textContent = d.total === 0 ? 'no data' : `${d.distinct} vals*`;
-                existing.title = makeTip(col, d).slice(0, 220);
+                if (badgeSpan) badgeSpan.textContent = `${d.distinct} vals`;
               }
               continue;
             }
+            if (col.description && rec !== false) continue; // description col + still good → don't touch
             const tip = makeTip(col, d).slice(0, 160);
             const badge = badgeText(d);
 
@@ -2107,28 +2136,41 @@
       document.getElementById('add-field-modal').classList.add('hidden');
     }
 
-    async function submitAddFieldMonitor() {
-      const label      = document.getElementById('fm-label').value.trim();
-      const bqTable    = document.getElementById('fm-bq-table').value.trim();
-      const fieldName  = document.getElementById('fm-field-name').value.trim();
-      const dateField  = document.getElementById('fm-date-field').value.trim() || 'partition_date';
-      const errEl      = document.getElementById('fm-error');
+    function _selectAllRec() {
+      document.querySelectorAll('#fm-rec-pills button').forEach(btn => {
+        btn.dataset.sel = '1';
+        btn.style.cssText = 'background:#312e81; color:#fff; border:1px solid #4f46e5;';
+      });
+      _syncFmSelectedChips();
+    }
 
-      if (!label || !bqTable || !fieldName) {
-        errEl.textContent = 'Monitor Name, BQ Table and Field Name are required.';
+    async function submitAddFieldMonitor() {
+      const label     = document.getElementById('fm-label').value.trim();
+      const bqTable   = document.getElementById('fm-bq-table').value.trim();
+      const dateField = document.getElementById('fm-date-field').value.trim() || 'partition_date';
+      const errEl     = document.getElementById('fm-error');
+      const selected  = [...document.querySelectorAll('#fm-rec-pills button[data-sel], #fm-other-pills button[data-sel]')]
+        .map(b => b.dataset.col);
+
+      if (!label || !bqTable || !selected.length) {
+        errEl.textContent = 'Monitor Name, BQ Table and at least one Field are required.';
         errEl.classList.remove('hidden');
         return;
       }
       errEl.classList.add('hidden');
       try {
-        const r = await fetch('/api/field-monitors', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ label, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        // Submit one monitor per selected field
+        for (const fieldName of selected) {
+          const monitorLabel = selected.length === 1 ? label : `${label} · ${fieldName.split('.').pop()}`;
+          const r = await fetch('/api/field-monitors', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ label: monitorLabel, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
+          });
+          const data = await r.json();
+          if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        }
         closeAddFieldModal();
-        showToast('Field monitor added!');
+        showToast(selected.length === 1 ? 'Field monitor added!' : `${selected.length} field monitors added!`);
         loadFieldMonitors();
       } catch (err) {
         errEl.textContent = err.message;
