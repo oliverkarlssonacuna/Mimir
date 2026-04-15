@@ -1908,8 +1908,9 @@
         ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
         : 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
       const shortType = col.type.length > 40 ? col.type.replace(/\s*<.*/, '').trim() : col.type;
-      const descLine = col.description ? `\n📋 ${col.description.slice(0, 100)}` : '';
-      btn.title = ((tooltip || `${col.name} (${shortType})`) + descLine).slice(0, 220);
+      const base = tooltip || `${col.name} (${shortType})`;
+      const descLine = col.description && !base.includes('📋') ? `\n📋 ${col.description.slice(0, 100)}` : '';
+      btn.title = (base + descLine).slice(0, 220);
       btn.innerHTML = `<span>${escHtml(col.name)}</span>${badge ? `<span style="font-size:10px;opacity:0.55;">${escHtml(badge)}</span>` : ''}`;
       btn.onmouseover = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#252b45' : '#1c1f27'; };
       btn.onmouseout  = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#1a1f35' : '#13151a'; };
