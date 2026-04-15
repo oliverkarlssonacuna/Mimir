@@ -665,15 +665,26 @@
             Alert when new distinct values appear in a BQ event field today vs. the past 7 days.
           </p>
         </div>
-        <button onclick="openAddFieldModal()"
-          class="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
-          style="background:#4f46e5; color:#fff;"
-          onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
-          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
-          </svg>
-          Add Field Monitor
-        </button>
+        <div class="flex items-center gap-2">
+          <button onclick="openDiscoverModal()"
+            class="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            style="background:#1c1f27; color:#818cf8; border:1px solid #2a2d38;"
+            onmouseover="this.style.background='#252b45'" onmouseout="this.style.background='#1c1f27'">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.347.347a3.75 3.75 0 01-5.304-5.304 5 5 0 001.279 6.047"/>
+            </svg>
+            Auto-discover
+          </button>
+          <button onclick="openAddFieldModal()"
+            class="flex items-center gap-2 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+            style="background:#4f46e5; color:#fff;"
+            onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            Add manually
+          </button>
+        </div>
       </div>
 
       <div class="rounded-xl border overflow-hidden shadow-xl" style="background:#1c1f27; border-color:#2a2d38;">
@@ -700,14 +711,13 @@
 
   </main>
 
-  <!-- ═══════════════════════════════════════════════════════════════════════ -->
-  <!-- MODAL: Add Field Monitor                                               -->
+  <!-- MODAL: Add Field Monitor (manual, simple)                             -->
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
   <div id="add-field-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
-    <div class="rounded-2xl border shadow-2xl w-full max-w-2xl mx-4 overflow-hidden flex flex-col"
-         style="background:#1c1f27; border-color:#2a2d38; max-height:90vh;">
-      <div class="px-6 py-4 border-b flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-lg mx-4 overflow-hidden flex flex-col"
+         style="background:#1c1f27; border-color:#2a2d38;">
+      <div class="px-6 py-4 border-b flex items-center justify-between" style="border-color:#2a2d38;">
         <h2 class="text-lg font-semibold text-white">Add Field Monitor</h2>
         <button onclick="closeAddFieldModal()" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -715,8 +725,7 @@
           </svg>
         </button>
       </div>
-      <div class="px-6 py-5 space-y-4 overflow-y-auto">
-
+      <div class="px-6 py-5 space-y-4">
         <!-- Catalog picker -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(or fill in manually below)</span></label>
@@ -733,49 +742,24 @@
             </div>
           </div>
         </div>
-
-        <!-- Monitor Name -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Monitor Name *</label>
           <input type="text" id="fm-label" placeholder="e.g. Character Class Values"
             class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
             style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
-
-        <!-- BQ Table -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">BQ Table *</label>
           <input type="text" id="fm-bq-table" placeholder="project.dataset.table"
             class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
             style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
         </div>
-
-        <!-- Field Name + Date Field -->
         <div class="grid grid-cols-2 gap-3">
           <div>
             <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Field Name *</label>
             <input type="text" id="fm-field-name" placeholder="e.g. character_class"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
-            <p id="fm-columns-loading" class="hidden text-xs mt-2" style="color:#6b7385;">Loading columns…</p>
-            <div id="fm-cols-wrap" class="hidden mt-2 space-y-2">
-              <div id="fm-rec-section" class="hidden">
-                <div class="flex items-center justify-between mb-1.5">
-                  <p class="text-xs font-semibold" style="color:#34d399;">✦ Recommended</p>
-                  <button onclick="_selectAllRec()" class="text-xs px-2 py-0.5 rounded" style="background:#1a2b22;color:#34d399;border:1px solid #1e3a2a;">Add all</button>
-                </div>
-                <div id="fm-rec-pills" class="flex flex-wrap gap-1.5"></div>
-              </div>
-              <div id="fm-other-section" class="hidden">
-                <p class="text-xs font-semibold mb-1.5 mt-2" style="color:#6b7385;">Not recommended</p>
-                <div id="fm-other-pills" class="flex flex-wrap gap-1.5"></div>
-              </div>
-              <p id="fm-analyzing" class="hidden text-xs" style="color:#6b7385;">⏳ Analysing uniqueness…</p>
-              <div id="fm-selected-wrap" class="hidden mt-2">
-                <p class="text-xs font-semibold mb-1" style="color:#9aa0b4;">Selected fields</p>
-                <div id="fm-selected-chips" class="flex flex-wrap gap-1.5"></div>
-              </div>
-            </div>
           </div>
           <div>
             <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Date Field <span style="color:#4f5668;">(default: partition_date)</span></label>
@@ -784,14 +768,79 @@
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
         </div>
-
         <div id="fm-error" class="hidden text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
       </div>
-      <div class="px-6 py-4 border-t flex items-center justify-end gap-3 flex-shrink-0" style="border-color:#2a2d38;">
+      <div class="px-6 py-4 border-t flex items-center justify-end gap-3" style="border-color:#2a2d38;">
         <button onclick="closeAddFieldModal()"
           class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
         <button onclick="submitAddFieldMonitor()"
           class="text-sm font-medium px-5 py-2 rounded-lg" style="background:#4f46e5; color:#fff;">Add Monitor</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Auto-discover Field Monitors                                    -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="discover-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-3xl mx-4 flex flex-col"
+         style="background:#1c1f27; border-color:#2a2d38; max-height:90vh;">
+      <div class="px-6 py-4 border-b flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
+        <div>
+          <h2 class="text-lg font-semibold text-white">Auto-discover Field Monitors</h2>
+          <p class="text-xs mt-0.5" style="color:#6b7385;">Analyses schema + 60 days of data to find monitorable fields</p>
+        </div>
+        <button onclick="closeDiscoverModal()" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+
+      <!-- Step 1: pick tables -->
+      <div id="disc-step-1" class="px-6 py-5 space-y-4 overflow-y-auto flex-1">
+        <p class="text-sm" style="color:#9aa0b4;">Select the tables you want to analyse:</p>
+        <input type="text" id="disc-table-search" placeholder="Filter tables…"
+          class="w-full px-3 py-2 text-sm rounded-lg border outline-none mb-2"
+          style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;"
+          oninput="filterDiscTables()">
+        <div id="disc-table-list" class="space-y-1 max-h-96 overflow-y-auto">
+          <p class="text-xs" style="color:#6b7385;">Loading catalog…</p>
+        </div>
+        <div id="disc-step1-error" class="hidden text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
+      </div>
+
+      <!-- Step 2: running analysis -->
+      <div id="disc-step-2" class="hidden px-6 py-10 text-center flex-1">
+        <div class="text-4xl mb-4">⏳</div>
+        <p class="text-sm font-medium text-white mb-2" id="disc-progress-label">Analysing tables…</p>
+        <p class="text-xs" style="color:#6b7385;">This may take up to a minute</p>
+        <div class="mt-4 rounded-full h-1.5 overflow-hidden" style="background:#2a2d38;">
+          <div id="disc-progress-bar" class="h-full rounded-full transition-all" style="background:#4f46e5; width:0%;"></div>
+        </div>
+      </div>
+
+      <!-- Step 3: review results -->
+      <div id="disc-step-3" class="hidden px-6 py-5 overflow-y-auto flex-1">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-sm" style="color:#9aa0b4;">Review suggestions — uncheck anything you don’t want:</p>
+          <div class="flex gap-2">
+            <button onclick="_discToggleAll(true)" class="text-xs px-2 py-1 rounded" style="background:#1a1f35;color:#818cf8;border:1px solid #2a2d38;">Select all</button>
+            <button onclick="_discToggleAll(false)" class="text-xs px-2 py-1 rounded" style="background:#13151a;color:#6b7385;border:1px solid #2a2d38;">Deselect all</button>
+          </div>
+        </div>
+        <div id="disc-results" class="space-y-4"></div>
+      </div>
+
+      <!-- Footer -->
+      <div class="px-6 py-4 border-t flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
+        <span id="disc-footer-info" class="text-xs" style="color:#6b7385;"></span>
+        <div class="flex gap-3">
+          <button onclick="closeDiscoverModal()" class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
+          <button id="disc-run-btn" onclick="runDiscover()" class="text-sm font-medium px-5 py-2 rounded-lg" style="background:#818cf8; color:#fff;">Analyse selected</button>
+          <button id="disc-create-btn" onclick="createDiscovered()" class="hidden text-sm font-medium px-5 py-2 rounded-lg" style="background:#4f46e5; color:#fff;">Create monitors</button>
+        </div>
       </div>
     </div>
   </div>
@@ -1824,15 +1873,6 @@
       document.getElementById('fm-catalog-search').value = '';
       document.getElementById('fm-catalog-items').innerHTML = '';
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
-      document.getElementById('fm-rec-pills').innerHTML = '';
-      document.getElementById('fm-other-pills').innerHTML = '';
-      document.getElementById('fm-selected-chips').innerHTML = '';
-      document.getElementById('fm-selected-wrap').classList.add('hidden');
-      document.getElementById('fm-cols-wrap').classList.add('hidden');
-      document.getElementById('fm-rec-section').classList.add('hidden');
-      document.getElementById('fm-other-section').classList.add('hidden');
-      document.getElementById('fm-analyzing').classList.add('hidden');
-      document.getElementById('fm-columns-loading').classList.add('hidden');
       document.getElementById('fm-error').classList.add('hidden');
       _fmCatalog = null;
       document.getElementById('add-field-modal').classList.remove('hidden');
@@ -1904,278 +1944,212 @@
       document.getElementById('fm-label').value = entry.label;
       document.getElementById('fm-bq-table').value = entry.bq_table;
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
-      // Load columns for the selected table
-      if (entry.bq_table) loadFmColumns(entry.bq_table);
+      // No column analysis in manual modal — user types field name
     }
-
-    function _makeFmPill(col, recommended, badge, tooltip) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
-      btn.dataset.col = col.name;
-      btn.className = 'inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded font-mono transition-all';
-      btn.style.cssText = recommended
-        ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
-        : 'background:#1c1f2b; color:#6b7385; border:1px solid #2a2d38;';
-      const shortType = col.type.length > 40 ? col.type.replace(/\s*<.*/, '').trim() : col.type;
-      const base = tooltip || `${col.name} (${shortType})`;
-      const descLine = col.description && !base.includes('📋') ? `\n📋 ${col.description.slice(0, 100)}` : '';
-      btn.title = (base + descLine).slice(0, 220);
-      btn.innerHTML = `<span>${escHtml(col.name)}</span>${badge ? `<span style="font-size:10px;opacity:0.55;">${escHtml(badge)}</span>` : ''}`;
-      btn.onmouseover = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#252b45' : '#252836'; };
-      btn.onmouseout  = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#1a1f35' : '#1c1f2b'; };
-      btn.onclick = () => _toggleFmPill(btn, col.name);
-      return btn;
-    }
-
-    function _toggleFmPill(btn, colName) {
-      if (btn.dataset.sel) {
-        delete btn.dataset.sel;
-        const inRec = !!btn.closest('#fm-rec-pills');
-        btn.style.cssText = inRec
-          ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
-          : 'background:#1c1f2b; color:#6b7385; border:1px solid #2a2d38;';
-      } else {
-        btn.dataset.sel = '1';
-        btn.style.cssText = 'background:#312e81; color:#fff; border:1px solid #4f46e5;';
-      }
-      _syncFmSelectedChips();
-    }
-
-    function _syncFmSelectedChips() {
-      const selected = [...document.querySelectorAll('#fm-rec-pills button[data-sel], #fm-other-pills button[data-sel]')]
-        .map(b => b.dataset.col);
-      const wrap = document.getElementById('fm-selected-wrap');
-      const chips = document.getElementById('fm-selected-chips');
-      chips.innerHTML = selected.map(c =>
-        `<span class="inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded font-mono" style="background:#312e81;color:#fff;border:1px solid #4f46e5;">${escHtml(c)}</span>`
-      ).join('');
-      wrap.classList.toggle('hidden', selected.length === 0);
-      // also update the legacy single-field input for backend compat
-      document.getElementById('fm-field-name').value = selected[0] || '';
-    }
-
-    async function loadFmColumns(bqTable) {
-      const loading   = document.getElementById('fm-columns-loading');
-      const wrap      = document.getElementById('fm-cols-wrap');
-      const recSec    = document.getElementById('fm-rec-section');
-      const otherSec  = document.getElementById('fm-other-section');
-      const recPills  = document.getElementById('fm-rec-pills');
-      const othPills  = document.getElementById('fm-other-pills');
-      const analyzing = document.getElementById('fm-analyzing');
-
-      wrap.classList.add('hidden');
-      recPills.innerHTML = '';
-      othPills.innerHTML = '';
-      recSec.classList.add('hidden');
-      otherSec.classList.add('hidden');
-      analyzing.classList.add('hidden');
-      loading.textContent = 'Loading columns…';
-      loading.classList.remove('hidden');
-
-      try {
-        const r = await fetch(`/api/bq-table-columns?table=${encodeURIComponent(bqTable)}`);
-        const payload = await r.json();
-        loading.classList.add('hidden');
-        if (!r.ok) {
-          loading.textContent = `⚠️ ${payload.detail || 'Error loading columns'}`;
-          loading.classList.remove('hidden');
-          return;
-        }
-        if (!payload.length) return;
-
-        // ── Phase 1: schema-based recommendation (instant, uses BQ field descriptions) ──
-        // get_table() returns all fields flat — STRUCTs already expanded, no STRUCT entries remain
-        const stringCols = payload.filter(c => c.type === 'STRING');
-        const nonStr     = payload.filter(c => c.type !== 'STRING');
-
-        // "Values: X, Y, Z" in description = definitive enum → always Recommended
-        const DESC_ENUM = /values?\s*:/i;
-        // Description keywords that indicate high-cardinality/identifier → Not recommended
-        const DESC_BAD  = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key',
-                           'session id', 'url', 'image', 'path', 'link', 'first name',
-                           'last name', 'display name', 'full name'];
-        // Name-based fallback (only used when column has NO description)
-        const ID_HINTS  = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp',
-                           '_at', '_ts', '_url', '_image', '_link', '_path'];
-        function isLikelyId(name) {
-          const leaf = name.split('.').pop().toLowerCase();
-          return leaf === 'id' || leaf.endsWith('_id') || ID_HINTS.some(p => leaf.includes(p));
-        }
-        function phase1Rec(col) {
-          const desc = (col.description || '').toLowerCase();
-          if (col.description) {
-            // Has a description — trust it. Bad signals = Not recommended, everything else = Recommended.
-            if (DESC_ENUM.test(col.description))       return true;
-            if (DESC_BAD.some(w => desc.includes(w)))  return false;
-            return true; // description exists but no bad signal → Recommended
-          }
-          // No description — fall back to name heuristic
-          return !isLikelyId(col.name);
-        }
-
-        stringCols.forEach(col => {
-          const rec = phase1Rec(col);
-          const badge = col.description ? '📋' : '⏳';
-          const tip   = col.description
-            ? `${col.name} · STRING\n📋 ${col.description}`
-            : `${col.name} · STRING · analysing…`;
-          (rec ? recPills : othPills).appendChild(_makeFmPill(col, rec, badge, tip));
-        });
-        nonStr.forEach(col => {
-          const baseType = col.type.replace(/\s*<.*/, '').trim();
-          othPills.appendChild(_makeFmPill(col, false, baseType, `${col.name} · ${baseType} · Not useful for field value monitoring`));
-        });
-
-        if (recPills.children.length)  recSec.classList.remove('hidden');
-        if (othPills.children.length)  otherSec.classList.remove('hidden');
-        wrap.classList.remove('hidden');
-        if (stringCols.length) analyzing.classList.remove('hidden');
-
-        // ── Phase 2: APPROX uniqueness analysis (non-blocking, updates in-place) ──
-        if (!stringCols.length) return;
-        try {
-          const ctrl = new AbortController();
-          const timer = setTimeout(() => ctrl.abort(), 20000);
-          let ra;
-          try {
-            ra = await fetch(`/api/bq-table-columns/analyze?table=${encodeURIComponent(bqTable)}`, { signal: ctrl.signal });
-          } finally {
-            clearTimeout(timer);
-          }
-          analyzing.classList.add('hidden');
-          if (!ra.ok) return;
-          const analysis = await ra.json();
-
-          function badgeText(d) {
-            return d.distinct <= 50
-              ? `${d.distinct} vals`
-              : `~${Math.round(d.ratio * 100)}% uniq`;
-          }
-          // ID-named columns: only recommend if ≤5 distinct (true enum like steam_app_id)
-          // Other columns: recommend if ≤50 distinct OR ratio < 80%
-          // Sparse data (total < 20 rows): trust Phase 1 name heuristic only
-          function isRec(col, d) {
-            if (d.total < 100) return null;          // too little data → keep Phase 1
-            if (d.distinct === 0) return false;       // all NULL → never useful
-            const nameIsId = isLikelyId(col.name);
-            return nameIsId ? d.distinct <= 5 : (d.distinct <= 50 || d.ratio < 0.8);
-          }
-          function makeTip(col, d) {
-            const pct = Math.round(d.ratio * 100);
-            const rec = isRec(col, d);
-            const line3 = rec === null
-              ? '⚠ Too little data — using schema heuristic'
-              : rec
-                ? '✓ Good candidate for field monitoring'
-                : d.distinct === 0
-                  ? '⚠ All values are NULL — not useful for monitoring'
-                  : '⚠ High cardinality — likely not useful for monitoring';
-            const descLine = col.description ? `\n📋 ${col.description.slice(0, 100)}` : '';
-            return `${col.name} · STRING\n${d.distinct.toLocaleString()} distinct / ${d.total.toLocaleString()} total (~${pct}% unique)\n${line3}${descLine}`;
-          }
-
-          for (const col of stringCols) {
-            const d = analysis[col.name];
-            if (!d) continue;
-
-            const rec = isRec(col, d);
-            // null = too little data → keep Phase 1 placement
-            // description columns: keep placement UNLESS all values are NULL (rec === false && distinct === 0)
-            if (rec === null) {
-              const existing = wrap.querySelector(`button[data-col="${CSS.escape(col.name)}"]`);
-              if (existing && !col.description) {
-                const badgeSpan = existing.querySelector('span:last-child');
-                if (badgeSpan) badgeSpan.textContent = `${d.distinct} vals`;
-              }
-              continue;
-            }
-            if (col.description && rec !== false) continue; // description col + still good → don't touch
-            const tip = makeTip(col, d).slice(0, 160);
-            const badge = badgeText(d);
-
-            // Update pill in-place instead of removing and re-adding
-            const existing = wrap.querySelector(`button[data-col="${CSS.escape(col.name)}"]`);
-            if (existing) {
-              const badgeSpan = existing.querySelector('span:last-child');
-              if (badgeSpan) badgeSpan.textContent = badge;
-              existing.title = tip;
-              // Move between sections only if recommendation changed
-              const inRec = !!existing.closest('#fm-rec-pills');
-              if (rec && !inRec) {
-                existing.style.cssText = 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;';
-                recPills.appendChild(existing);
-              } else if (!rec && inRec) {
-                existing.style.cssText = 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
-                othPills.appendChild(existing);
-              }
-            } else {
-              (rec ? recPills : othPills).appendChild(_makeFmPill(col, rec, badge, tip));
-            }
-          }
-
-          recSec.classList.toggle('hidden',  !recPills.children.length);
-          otherSec.classList.toggle('hidden', !othPills.children.length);
-        } catch (_) {
-          analyzing.classList.add('hidden'); // silently keep Phase 1 heuristic
-        }
-      } catch (err) {
-        loading.textContent = `Could not load columns: ${err.message}`;
-        loading.classList.remove('hidden');
-      }
-    }
-
-    document.addEventListener('click', (e) => {
-      const dd    = document.getElementById('fm-catalog-dropdown');
-      const input = document.getElementById('fm-catalog-search');
-      if (dd && input && !dd.contains(e.target) && e.target !== input) {
-        dd.classList.add('hidden');
-      }
-    });
 
     function closeAddFieldModal() {
       document.getElementById('add-field-modal').classList.add('hidden');
     }
 
-    function _selectAllRec() {
-      document.querySelectorAll('#fm-rec-pills button').forEach(btn => {
-        btn.dataset.sel = '1';
-        btn.style.cssText = 'background:#312e81; color:#fff; border:1px solid #4f46e5;';
-      });
-      _syncFmSelectedChips();
-    }
-
     async function submitAddFieldMonitor() {
       const label     = document.getElementById('fm-label').value.trim();
       const bqTable   = document.getElementById('fm-bq-table').value.trim();
+      const fieldName = document.getElementById('fm-field-name').value.trim();
       const dateField = document.getElementById('fm-date-field').value.trim() || 'partition_date';
       const errEl     = document.getElementById('fm-error');
-      const selected  = [...document.querySelectorAll('#fm-rec-pills button[data-sel], #fm-other-pills button[data-sel]')]
-        .map(b => b.dataset.col);
-
-      if (!label || !bqTable || !selected.length) {
-        errEl.textContent = 'Monitor Name, BQ Table and at least one Field are required.';
+      if (!label || !bqTable || !fieldName) {
+        errEl.textContent = 'Monitor Name, BQ Table and Field Name are required.';
         errEl.classList.remove('hidden');
         return;
       }
       errEl.classList.add('hidden');
       try {
-        // Submit one monitor per selected field
-        for (const fieldName of selected) {
-          const monitorLabel = selected.length === 1 ? label : `${label} · ${fieldName.split('.').pop()}`;
-          const r = await fetch('/api/field-monitors', {
-            method: 'POST', headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ label: monitorLabel, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
-          });
-          const data = await r.json();
-          if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-        }
+        const r = await fetch('/api/field-monitors', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ label, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
+        });
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
         closeAddFieldModal();
-        showToast(selected.length === 1 ? 'Field monitor added!' : `${selected.length} field monitors added!`);
+        showToast('Field monitor added!');
         loadFieldMonitors();
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
       }
+    }
+
+    // ── Auto-discover wizard ──────────────────────────────────────────────────
+
+    let _discCatalog = null;
+    let _discSuggestions = [];
+
+    async function openDiscoverModal() {
+      document.getElementById('discover-modal').classList.remove('hidden');
+      document.getElementById('disc-step-1').classList.remove('hidden');
+      document.getElementById('disc-step-2').classList.add('hidden');
+      document.getElementById('disc-step-3').classList.add('hidden');
+      document.getElementById('disc-run-btn').classList.remove('hidden');
+      document.getElementById('disc-create-btn').classList.add('hidden');
+      document.getElementById('disc-footer-info').textContent = '';
+      document.getElementById('disc-step1-error').classList.add('hidden');
+      await _loadDiscCatalog();
+    }
+
+    function closeDiscoverModal() {
+      document.getElementById('discover-modal').classList.add('hidden');
+    }
+
+    async function _loadDiscCatalog() {
+      if (_discCatalog !== null) { renderDiscTables(_discCatalog); return; }
+      try {
+        const r = await fetch('/api/field-monitors/catalog');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        _discCatalog = await r.json();
+        renderDiscTables(_discCatalog);
+      } catch (err) {
+        document.getElementById('disc-table-list').innerHTML =
+          `<p class="text-xs" style="color:#f87171;">Could not load catalog: ${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function renderDiscTables(entries) {
+      const list = document.getElementById('disc-table-list');
+      if (!entries.length) { list.innerHTML = '<p class="text-xs" style="color:#6b7385;">No catalog entries found.</p>'; return; }
+      list.innerHTML = entries.map((e, i) => `
+        <label class="flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer hover:bg-opacity-50"
+               style="background:#13151a; border:1px solid #2a2d38;">
+          <input type="checkbox" class="disc-tbl-check mt-0.5" data-i="${i}" checked
+            style="accent-color:#4f46e5;">
+          <div>
+            <span class="text-sm font-medium" style="color:#c8cdd8;">${escHtml(e.label)}</span>
+            <span class="block text-xs font-mono mt-0.5" style="color:#4f5668;">${escHtml(e.bq_table || '')}</span>
+          </div>
+        </label>`).join('');
+      document.getElementById('disc-footer-info').textContent = `${entries.length} tables in catalog`;
+    }
+
+    function filterDiscTables() {
+      if (!_discCatalog) return;
+      const q = document.getElementById('disc-table-search').value.toLowerCase();
+      renderDiscTables(_discCatalog.filter(e => e.label.toLowerCase().includes(q) || (e.bq_table||'').toLowerCase().includes(q)));
+    }
+
+    async function runDiscover() {
+      const checked = [...document.querySelectorAll('.disc-tbl-check:checked')];
+      if (!checked.length) {
+        const err = document.getElementById('disc-step1-error');
+        err.textContent = 'Select at least one table.';
+        err.classList.remove('hidden');
+        return;
+      }
+      const tables = checked.map(cb => _discCatalog[parseInt(cb.dataset.i)]);
+
+      document.getElementById('disc-step-1').classList.add('hidden');
+      document.getElementById('disc-step-2').classList.remove('hidden');
+      document.getElementById('disc-run-btn').classList.add('hidden');
+      document.getElementById('disc-footer-info').textContent = `Analysing ${tables.length} tables…`;
+
+      // Animate progress bar (fake, since backend is synchronous)
+      let pct = 0;
+      const bar = document.getElementById('disc-progress-bar');
+      const prog = document.getElementById('disc-progress-label');
+      const interval = setInterval(() => {
+        pct = Math.min(pct + (100 / tables.length / 3), 90);
+        bar.style.width = pct + '%';
+      }, 800);
+
+      try {
+        const r = await fetch('/api/field-monitors/discover', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ tables }),
+        });
+        clearInterval(interval);
+        bar.style.width = '100%';
+        const data = await r.json();
+        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+        _discSuggestions = data.suggestions || [];
+        renderDiscResults(_discSuggestions, data.errors || []);
+      } catch (err) {
+        clearInterval(interval);
+        document.getElementById('disc-step-2').classList.add('hidden');
+        document.getElementById('disc-step-1').classList.remove('hidden');
+        document.getElementById('disc-run-btn').classList.remove('hidden');
+        const e = document.getElementById('disc-step1-error');
+        e.textContent = `Analysis failed: ${err.message}`;
+        e.classList.remove('hidden');
+      }
+    }
+
+    function renderDiscResults(suggestions, errors) {
+      document.getElementById('disc-step-2').classList.add('hidden');
+      document.getElementById('disc-step-3').classList.remove('hidden');
+      document.getElementById('disc-create-btn').classList.remove('hidden');
+
+      const container = document.getElementById('disc-results');
+      if (!suggestions.length) {
+        container.innerHTML = '<p class="text-sm" style="color:#6b7385;">No monitorable fields found. Try selecting more tables.</p>';
+        document.getElementById('disc-footer-info').textContent = errors.length ? `${errors.length} tables failed` : 'No suggestions';
+        return;
+      }
+
+      // Group by bq_table
+      const grouped = {};
+      suggestions.forEach((s, i) => {
+        if (!grouped[s.bq_table]) grouped[s.bq_table] = [];
+        grouped[s.bq_table].push({ ...s, _idx: i });
+      });
+
+      container.innerHTML = Object.entries(grouped).map(([tbl, fields]) => `
+        <div class="rounded-lg border p-3 space-y-2" style="background:#13151a; border-color:#2a2d38;">
+          <p class="text-xs font-mono" style="color:#4f5668;">${escHtml(tbl)}</p>
+          ${fields.map(f => `
+            <label class="flex items-start gap-3 cursor-pointer">
+              <input type="checkbox" class="disc-sug-check mt-0.5" data-idx="${f._idx}" checked
+                style="accent-color:#4f46e5;">
+              <div>
+                <span class="text-sm font-medium" style="color:#c8cdd8;">${escHtml(f.field_name)}</span>
+                ${f.description ? `<span class="block text-xs mt-0.5" style="color:#6b7385;">📋 ${escHtml(f.description.slice(0, 120))}</span>` : ''}
+                <span class="block text-xs mt-0.5" style="color:#4f5668;">${f.distinct.toLocaleString()} distinct values over 60 days</span>
+              </div>
+            </label>`).join('')}
+        </div>`).join('');
+
+      const n = suggestions.length;
+      document.getElementById('disc-footer-info').textContent =
+        `${n} suggestion${n !== 1 ? 's' : ''} across ${Object.keys(grouped).length} tables` +
+        (errors.length ? ` · ${errors.length} failed` : '');
+    }
+
+    function _discToggleAll(checked) {
+      document.querySelectorAll('.disc-sug-check').forEach(cb => cb.checked = checked);
+    }
+
+    async function createDiscovered() {
+      const selected = [...document.querySelectorAll('.disc-sug-check:checked')]
+        .map(cb => _discSuggestions[parseInt(cb.dataset.idx)]);
+      if (!selected.length) { showToast('Nothing selected', true); return; }
+
+      const btn = document.getElementById('disc-create-btn');
+      btn.textContent = 'Creating…';
+      btn.disabled = true;
+
+      let created = 0, failed = 0;
+      for (const s of selected) {
+        try {
+          const r = await fetch('/api/field-monitors', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ label: s.label, bq_table: s.bq_table, field_name: s.field_name, date_field: s.date_field }),
+          });
+          if (r.ok) created++; else failed++;
+        } catch { failed++; }
+      }
+
+      btn.textContent = 'Create monitors';
+      btn.disabled = false;
+      closeDiscoverModal();
+      loadFieldMonitors();
+      showToast(failed ? `${created} created, ${failed} failed` : `${created} field monitors created!`, failed > 0);
     }
 
     function escHtml(str) {

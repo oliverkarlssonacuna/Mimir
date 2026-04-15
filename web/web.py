@@ -32,10 +32,6 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Mimir Admin", docs_url=None, redoc_url=None)
 
-# Simple in-memory cache for column cardinality analysis (2h TTL per table)
-_analyze_cache: dict[str, tuple[float, dict]] = {}  # key -> (timestamp, result)
-_ANALYZE_CACHE_TTL = 7200  # seconds
-
 _session_secret = os.environ.get("SESSION_SECRET")
 
 if not _session_secret:
@@ -1304,108 +1300,156 @@ async def bq_table_columns(request: Request, table: str):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
-@app.get("/api/bq-table-columns/analyze", include_in_schema=False)
-async def analyze_bq_table_columns(request: Request, table: str, date_field: str = "partition_date"):
-    """Run APPROX_COUNT_DISTINCT on STRING columns to estimate uniqueness ratio."""
-    import time as _time
+@app.post("/api/field-monitors/discover", include_in_schema=False)
+async def discover_field_monitors(request: Request):
+    """
+    Analyse selected catalog tables: schema descriptions + APPROX_COUNT_DISTINCT over 60 days.
+    Returns suggestions: {label, bq_table, field_name, date_field, distinct, description, recommended}
+    """
     if not _user(request):
         raise HTTPException(status_code=401, detail="Not authenticated")
-    if not table or "`" in table or ";" in table or len(table) > 300:
-        raise HTTPException(status_code=400, detail="Invalid table name")
+    body = await request.json()
+    tables = body.get("tables", [])  # list of {label, bq_table, date_field}
+    if not tables:
+        raise HTTPException(status_code=400, detail="No tables provided")
 
-    cache_key = f"{table}:{date_field}"
-    cached = _analyze_cache.get(cache_key)
-    if cached and (_time.time() - cached[0]) < _ANALYZE_CACHE_TTL:
-        return cached[1]
-    parts = table.split(".")
-    if len(parts) != 3:
-        raise HTTPException(status_code=400, detail="Expected project.dataset.table")
-    project, dataset, tbl_name = parts
     from google.cloud import bigquery as _bq
-    from google.oauth2.credentials import Credentials
 
     access_token = request.session.get("access_token", "")
-    use_user_creds = bool(access_token and _is_cloud)
 
-    def _exec(sql, params=None):
-        if use_user_creds:
-            creds = Credentials(token=access_token)
-            client = _bq.Client(project=project, credentials=creds)
-            cfg = _bq.QueryJobConfig(query_parameters=params or [])
-            return [dict(r) for r in client.query(sql, job_config=cfg).result()]
-        return bq.run_query(sql, params=params or [], max_rows=500)
+    def _get_bq_client(project: str):
+        if access_token and _is_cloud:
+            from google.oauth2.credentials import Credentials
+            return _bq.Client(project=project, credentials=Credentials(token=access_token))
+        return bq.client
 
-    try:
-        tbl_param = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
-        # Top-level STRING columns
-        string_cols = [
-            r["column_name"]
-            for r in _exec(
-                f"SELECT column_name FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
-                f"WHERE table_name = @tbl AND data_type = 'STRING' ORDER BY ordinal_position",
-                tbl_param,
-            )
-        ]
-        # Nested STRUCT sub-fields that are STRING
+    def _exec(client, sql, params=None):
+        cfg = _bq.QueryJobConfig(query_parameters=params or [])
+        return [dict(r) for r in client.query(sql, job_config=cfg).result()]
+
+    DESC_BAD = ['identifier', 'uuid', 'unique key', 'foreign key', 'primary key',
+                'session id', 'url', 'image', 'path', 'link', 'first name',
+                'last name', 'display name', 'full name']
+    ID_HINTS = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp',
+                '_at', '_ts', '_url', '_image', '_link', '_path']
+
+    def _is_id_name(name: str) -> bool:
+        leaf = name.split('.')[-1].lower()
+        return leaf == 'id' or leaf.endswith('_id') or any(h in leaf for h in ID_HINTS)
+
+    def _schema_rec(description: str, name: str) -> bool | None:
+        """True=recommended, False=not, None=unknown (use cardinality)"""
+        if description:
+            desc = description.lower()
+            if any(w in desc for w in DESC_BAD):
+                return False
+            return True  # has description and not bad → trust it
+        return None  # no description → decide by cardinality
+
+    def _flatten_strings(fields, prefix=""):
+        out = []
+        for f in fields:
+            path = f"{prefix}.{f.name}" if prefix else f.name
+            if f.field_type in ("RECORD", "STRUCT"):
+                out.extend(_flatten_strings(f.fields, path))
+            elif f.field_type == "STRING":
+                out.append({"name": path, "description": f.description or ""})
+        return out
+
+    suggestions = []
+    errors = []
+
+    for entry in tables:
+        tbl_full = entry.get("bq_table", "")
+        tbl_label = entry.get("label", tbl_full)
+        date_field = entry.get("date_field", "partition_date")
+        parts = tbl_full.split(".")
+        if len(parts) != 3:
+            errors.append(f"Skipped {tbl_full}: invalid format")
+            continue
+        project, dataset, tbl_name = parts
+
         try:
-            nested_cols = [
-                r["field_path"]
-                for r in _exec(
-                    f"SELECT field_path FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMN_FIELD_PATHS` "
-                    f"WHERE table_name = @tbl AND data_type = 'STRING' AND field_path != column_name "
-                    f"ORDER BY field_path",
-                    tbl_param,
-                )
-            ]
-        except Exception:
-            nested_cols = []
-        string_cols = string_cols + nested_cols
-        # Cap to avoid overly large queries
-        string_cols = string_cols[:60]
-        if not string_cols:
-            return {}
+            client = _get_bq_client(project)
+            tbl_param = [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)]
 
-        # Use safe positional aliases to avoid reserved-word issues
-        aliases = [f"_c{i}_" for i in range(len(string_cols))]
-        approx_parts = ", ".join(
-            # Nested paths (e.g. metadata.event_type) must NOT use backticks
-            f"APPROX_COUNT_DISTINCT({'`' + c + '`' if '.' not in c else c}) AS {a}"
-            for c, a in zip(string_cols, aliases)
-        )
-
-        # Try yesterday first, fall back to last 7 days — never do a full table scan
-        rows = None
-        for where in [
-            f"WHERE `{date_field}` = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)",
-            f"WHERE `{date_field}` >= DATE_SUB(CURRENT_DATE(), INTERVAL 7 DAY)",
-        ]:
-            try:
-                result = _exec(f"SELECT COUNT(*) AS _total, {approx_parts} FROM `{table}` {where}")
-                if result and int(result[0].get("_total") or 0) > 0:
-                    rows = result
-                    break
-            except Exception:
+            # 1. Schema via get_table() — free API call
+            tbl_obj = client.get_table(tbl_full)
+            string_fields = _flatten_strings(tbl_obj.schema)[:60]
+            if not string_fields:
                 continue
 
-        if not rows:
-            return {}
+            # 2. Latest partition with data (free metadata)
+            latest_date = None
+            try:
+                part_rows = _exec(client,
+                    f"SELECT partition_id FROM `{project}.{dataset}.INFORMATION_SCHEMA.PARTITIONS` "
+                    f"WHERE table_name = @tbl AND partition_id NOT IN ('__NULL__','__UNPARTITIONED__') "
+                    f"AND total_rows > 0 ORDER BY partition_id DESC LIMIT 1",
+                    tbl_param)
+                if part_rows:
+                    raw = part_rows[0]["partition_id"]
+                    latest_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+            except Exception:
+                pass
 
-        row = rows[0]
-        total = int(row.get("_total") or 1)
-        result = {
-            c: {
-                "distinct": int(row.get(a) or 0),
-                "total": total,
-                "ratio": round(int(row.get(a) or 0) / total, 3),
-            }
-            for c, a in zip(string_cols, aliases)
-        }
-        import time as _time
-        _analyze_cache[cache_key] = (_time.time(), result)
-        return result
-    except Exception as e:
-        logger.warning("Column analysis failed for %s: %s", table, e)
-        raise HTTPException(status_code=500, detail=str(e))
+            if latest_date:
+                where = (f"WHERE `{date_field}` BETWEEN "
+                         f"DATE_SUB('{latest_date}', INTERVAL 60 DAY) AND '{latest_date}'")
+            else:
+                where = f"WHERE `{date_field}` >= DATE_SUB(CURRENT_DATE(), INTERVAL 60 DAY)"
+
+            # 3. APPROX_COUNT_DISTINCT for all string fields in one query
+            aliases = [f"_c{i}_" for i in range(len(string_fields))]
+            approx_parts = ", ".join(
+                f"APPROX_COUNT_DISTINCT({'`' + f['name'] + '`' if '.' not in f['name'] else f['name']}) AS {a}"
+                for f, a in zip(string_fields, aliases)
+            )
+            rows = _exec(client,
+                f"SELECT COUNT(*) AS _total, {approx_parts} FROM `{tbl_full}` {where}")
+
+            if not rows or int(rows[0].get("_total") or 0) == 0:
+                continue
+
+            row = rows[0]
+            total = int(row["_total"] or 1)
+
+            for field, alias in zip(string_fields, aliases):
+                distinct = int(row.get(alias) or 0)
+                ratio = round(distinct / total, 3)
+                desc = field["description"]
+                name = field["name"]
+
+                schema_rec = _schema_rec(desc, name)
+                if schema_rec is False:
+                    continue  # explicit bad signal from description → skip entirely
+                if schema_rec is True:
+                    rec = distinct > 0  # has description → recommend unless all NULL
+                else:
+                    # No description: use cardinality
+                    if distinct == 0:
+                        continue  # all NULL
+                    rec = (distinct <= 50 or ratio < 0.1) and not _is_id_name(name)
+
+                if not rec:
+                    continue  # don't include non-recommended in suggestions
+
+                suggestions.append({
+                    "label": f"{tbl_label} · {name.split('.')[-1]}",
+                    "bq_table": tbl_full,
+                    "field_name": name,
+                    "date_field": date_field,
+                    "distinct": distinct,
+                    "total": total,
+                    "description": desc,
+                })
+
+        except Exception as e:
+            errors.append(f"{tbl_full}: {e}")
+            logger.warning("Discover failed for %s: %s", tbl_full, e)
+
+    return {"suggestions": suggestions, "errors": errors}
+
 
 @app.get("/api/field-monitors", include_in_schema=False)
 async def list_field_monitors(request: Request):
