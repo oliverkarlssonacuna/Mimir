@@ -1284,14 +1284,16 @@ async def bq_table_columns(request: Request, table: str):
         for f in fields:
             path = f"{prefix}.{f.name}" if prefix else f.name
             if f.field_type in ("RECORD", "STRUCT"):
-                out.extend(_flatten(f.fields, path))
+                if f.mode != "REPEATED":  # skip ARRAY<STRUCT> — requires UNNEST
+                    out.extend(_flatten(f.fields, path))
             else:
-                out.append({
-                    "name": path,
-                    "type": f.field_type,
-                    "description": f.description or "",
-                    "mode": f.mode,
-                })
+                if f.mode != "REPEATED":
+                    out.append({
+                        "name": path,
+                        "type": f.field_type,
+                        "description": f.description or "",
+                        "mode": f.mode,
+                    })
         return out
 
     try:
@@ -1346,14 +1348,32 @@ async def discover_field_monitors(request: Request):
             return True  # has description and not bad → trust it
         return None  # no description → decide by cardinality
 
-    def _flatten_strings(fields, prefix=""):
+    def _flatten_strings(fields, prefix="", array_parent=None):
+        """Flatten schema fields to a list of {name, description, array_parent}.
+        array_parent is set when a field lives inside an ARRAY<STRUCT>.
+        These require UNNEST and are stored as 'array_path>subfield'.
+        """
         out = []
         for f in fields:
             path = f"{prefix}.{f.name}" if prefix else f.name
+            is_repeated = f.mode == "REPEATED"
             if f.field_type in ("RECORD", "STRUCT"):
-                out.extend(_flatten_strings(f.fields, path))
-            elif f.field_type == "STRING":
-                out.append({"name": path, "description": f.description or ""})
+                if is_repeated:
+                    # ARRAY<STRUCT> — recurse but mark children as needing UNNEST
+                    out.extend(_flatten_strings(f.fields, path, array_parent=path))
+                else:
+                    out.extend(_flatten_strings(f.fields, path, array_parent=array_parent))
+            elif f.field_type == "STRING" and not is_repeated:
+                if array_parent:
+                    # Field inside an array — store as "array_path>subfield"
+                    subfield = f.name
+                    out.append({
+                        "name": f"{array_parent}>{subfield}",
+                        "description": f.description or "",
+                        "array_parent": array_parent,
+                    })
+                else:
+                    out.append({"name": path, "description": f.description or "", "array_parent": None})
         return out
 
     suggestions = []
@@ -1415,24 +1435,62 @@ async def discover_field_monitors(request: Request):
             else:
                 where = ""  # unpartitioned — full scan (small tables only)
 
-            # 3. APPROX_COUNT_DISTINCT for all string fields in one query
-            aliases = [f"_c{i}_" for i in range(len(string_fields))]
-            approx_parts = ", ".join(
-                f"APPROX_COUNT_DISTINCT({'`' + f['name'] + '`' if '.' not in f['name'] else f['name']}) AS {a}"
-                for f, a in zip(string_fields, aliases)
-            )
-            rows = _exec(client,
-                f"SELECT COUNT(*) AS _total, {approx_parts} FROM `{tbl_full}` {where}")
+            # 3. Split fields into regular vs array (require UNNEST)
+            regular_fields = [f for f in string_fields if not f["array_parent"]]
+            array_fields   = [f for f in string_fields if f["array_parent"]]
 
-            if not rows or int(rows[0].get("_total") or 0) == 0:
+            def _get_approx_rows(fields_subset, unnest_clause=""):
+                if not fields_subset:
+                    return [], []
+                aliases = [f"_c{i}_" for i in range(len(fields_subset))]
+                parts = []
+                for f, a in zip(fields_subset, aliases):
+                    col = f["name"].split(">")[1] if ">" in f["name"] else f["name"]
+                    ref = col if "." in col else f"`{col}`"
+                    parts.append(f"APPROX_COUNT_DISTINCT({ref}) AS {a}")
+                sql = (f"SELECT COUNT(*) AS _total, {', '.join(parts)} "
+                       f"FROM `{tbl_full}` {unnest_clause} {where}")
+                try:
+                    r = _exec(client, sql)
+                    return r, aliases
+                except Exception as e:
+                    logger.warning("APPROX failed for %s (%s): %s", tbl_full, unnest_clause, e)
+                    return [], aliases
+
+            all_results = {}
+
+            # Regular fields — one batch query
+            rows_reg, aliases_reg = _get_approx_rows(regular_fields)
+            if rows_reg and int(rows_reg[0].get("_total") or 0) > 0:
+                row = rows_reg[0]
+                total = int(row["_total"] or 1)
+                for field, alias in zip(regular_fields, aliases_reg):
+                    all_results[field["name"]] = (int(row.get(alias) or 0), total)
+
+            # Array fields — one query per unique array_parent (UNNEST clause)
+            array_parents = {}
+            for f in array_fields:
+                ap = f["array_parent"]
+                array_parents.setdefault(ap, []).append(f)
+
+            for ap, ap_fields in array_parents.items():
+                unnest = f", UNNEST({ap}) AS _arr"
+                rows_arr, aliases_arr = _get_approx_rows(ap_fields, unnest)
+                if rows_arr and int(rows_arr[0].get("_total") or 0) > 0:
+                    row = rows_arr[0]
+                    total = int(row["_total"] or 1)
+                    for field, alias in zip(ap_fields, aliases_arr):
+                        all_results[field["name"]] = (int(row.get(alias) or 0), total)
+
+            if not all_results:
                 continue
 
-            row = rows[0]
-            total = int(row["_total"] or 1)
-
-            for field, alias in zip(string_fields, aliases):
-                distinct = int(row.get(alias) or 0)
-                ratio = round(distinct / total, 3)
+            for field in string_fields:
+                result_entry = all_results.get(field["name"])
+                if not result_entry:
+                    continue
+                distinct, total = result_entry
+                ratio = round(distinct / total, 3) if total else 0
                 desc = field["description"]
                 name = field["name"]
 
@@ -1451,13 +1509,14 @@ async def discover_field_monitors(request: Request):
                     continue  # don't include non-recommended in suggestions
 
                 suggestions.append({
-                    "label": f"{tbl_label} · {name.split('.')[-1]}",
+                    "label": f"{tbl_label} · {name.split('>')[-1].split('.')[-1]}",
                     "bq_table": tbl_full,
                     "field_name": name,
                     "date_field": date_field or "partition_date",
                     "distinct": distinct,
                     "total": total,
                     "description": desc,
+                    "is_array": bool(field["array_parent"]),
                 })
 
         except Exception as e:

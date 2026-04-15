@@ -215,13 +215,26 @@ class BQClient:
         date_filter: str,
         extra_filter: str = "",
     ) -> set[str]:
-        """Return distinct string values of field_name matching date_filter."""
-        sql = (
-            f"SELECT DISTINCT CAST(`{field_name}` AS STRING) AS val "
-            f"FROM `{bq_table}` "
-            f"WHERE {date_field} {date_filter} "
-            f"{extra_filter}"
-        )
+        """Return distinct string values of field_name matching date_filter.
+        
+        For ARRAY<STRUCT> fields, use notation 'array_path>subfield'
+        e.g. 'character.ovr_roles>role' → UNNEST(character.ovr_roles) AS _arr, _arr.role
+        """
+        if ">" in field_name:
+            array_path, subfield = field_name.split(">", 1)
+            sql = (
+                f"SELECT DISTINCT CAST(_arr.`{subfield}` AS STRING) AS val "
+                f"FROM `{bq_table}`, UNNEST({array_path}) AS _arr "
+                f"WHERE {date_field} {date_filter} "
+                f"{extra_filter}"
+            )
+        else:
+            sql = (
+                f"SELECT DISTINCT CAST(`{field_name}` AS STRING) AS val "
+                f"FROM `{bq_table}` "
+                f"WHERE {date_field} {date_filter} "
+                f"{extra_filter}"
+            )
         rows = self.run_query(sql, max_rows=2000)
         return {r["val"] for r in rows if r.get("val") is not None}
 
