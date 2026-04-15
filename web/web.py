@@ -1401,8 +1401,9 @@ async def discover_field_monitors(request: Request):
                         f"AND total_rows > 0 ORDER BY partition_id DESC LIMIT 1",
                         tbl_param)
                     if part_rows:
-                        raw = part_rows[0]["partition_id"]
-                        latest_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+                        raw = str(part_rows[0]["partition_id"])[:8]  # take first 8 chars (YYYYMMDD)
+                        if raw.isdigit() and len(raw) == 8:
+                            latest_date = f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
                 except Exception:
                     pass
 

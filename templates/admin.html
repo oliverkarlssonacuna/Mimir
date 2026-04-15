@@ -2132,6 +2132,15 @@
         const errDiv = document.createElement('div');
         errDiv.className = 'rounded-lg border p-3 space-y-1';
         errDiv.style.cssText = 'background:#2d1d20; border-color:#4a2020;';
+        errDiv.innerHTML = `<p class="text-xs font-semibold mb-1" style="color:#f87171;">⚠ Failed tables:</p>` +
+          errors.map(e => `<p class="text-xs font-mono" style="color:#f87171;">${escHtml(e)}</p>`).join('');
+        container.appendChild(errDiv);
+      }
+
+      if (errors.length) {
+        const errDiv = document.createElement('div');
+        errDiv.className = 'rounded-lg border p-3 space-y-1';
+        errDiv.style.cssText = 'background:#2d1d20; border-color:#4a2020;';
         errDiv.innerHTML = `<p class="text-xs font-semibold mb-1" style="color:#f87171;">⚠ ${errors.length} table${errors.length > 1 ? 's' : ''} failed:</p>` +
           errors.map(e => `<p class="text-xs font-mono" style="color:#f87171;">${escHtml(e)}</p>`).join('');
         container.appendChild(errDiv);
