@@ -757,8 +757,18 @@
             <input type="text" id="fm-field-name" placeholder="e.g. character_class"
               class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
-            <div id="fm-column-pills" class="hidden flex-wrap gap-1 mt-2"></div>
             <p id="fm-columns-loading" class="hidden text-xs mt-2" style="color:#6b7385;">Loading columns…</p>
+            <div id="fm-cols-wrap" class="hidden mt-2 space-y-2">
+              <div id="fm-rec-section" class="hidden">
+                <p class="text-xs font-semibold mb-1.5" style="color:#34d399;">✦ Recommended</p>
+                <div id="fm-rec-pills" class="flex flex-wrap gap-1.5"></div>
+              </div>
+              <div id="fm-other-section" class="hidden">
+                <p class="text-xs font-semibold mb-1.5 mt-2" style="color:#4f5668;">Not recommended</p>
+                <div id="fm-other-pills" class="flex flex-wrap gap-1.5"></div>
+              </div>
+              <p id="fm-analyzing" class="hidden text-xs" style="color:#6b7385;">⏳ Analysing uniqueness…</p>
+            </div>
           </div>
           <div>
             <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Date Field <span style="color:#4f5668;">(default: partition_date)</span></label>
@@ -1807,8 +1817,12 @@
       document.getElementById('fm-catalog-search').value = '';
       document.getElementById('fm-catalog-items').innerHTML = '';
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
-      document.getElementById('fm-column-pills').innerHTML = '';
-      document.getElementById('fm-column-pills').classList.add('hidden');
+      document.getElementById('fm-rec-pills').innerHTML = '';
+      document.getElementById('fm-other-pills').innerHTML = '';
+      document.getElementById('fm-cols-wrap').classList.add('hidden');
+      document.getElementById('fm-rec-section').classList.add('hidden');
+      document.getElementById('fm-other-section').classList.add('hidden');
+      document.getElementById('fm-analyzing').classList.add('hidden');
       document.getElementById('fm-columns-loading').classList.add('hidden');
       document.getElementById('fm-error').classList.add('hidden');
       _fmCatalog = null;
@@ -1885,49 +1899,130 @@
       if (entry.bq_table) loadFmColumns(entry.bq_table);
     }
 
+    function _makeFmPill(col, recommended, badge, tooltip) {
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.dataset.col = col.name;
+      btn.className = 'inline-flex items-center gap-1.5 px-2 py-0.5 text-xs rounded font-mono transition-all';
+      btn.style.cssText = recommended
+        ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
+        : 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
+      btn.title = tooltip || `${col.name} (${col.type})`;
+      btn.innerHTML = `<span>${escHtml(col.name)}</span>${badge ? `<span style="font-size:10px;opacity:0.55;">${escHtml(badge)}</span>` : ''}`;
+      btn.onmouseover = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#252b45' : '#1c1f27'; };
+      btn.onmouseout  = () => { if (!btn.dataset.sel) btn.style.background = recommended ? '#1a1f35' : '#13151a'; };
+      btn.onclick = () => {
+        document.getElementById('fm-field-name').value = col.name;
+        document.querySelectorAll('#fm-rec-pills button, #fm-other-pills button').forEach(b => {
+          delete b.dataset.sel;
+          const inRec = !!b.closest('#fm-rec-pills');
+          b.style.cssText = inRec
+            ? 'background:#1a1f35; color:#818cf8; border:1px solid #2a2d38;'
+            : 'background:#13151a; color:#3d4255; border:1px solid #1e2028;';
+        });
+        btn.dataset.sel = '1';
+        btn.style.cssText = 'background:#312e81; color:#fff; border:1px solid #4f46e5;';
+      };
+      return btn;
+    }
+
     async function loadFmColumns(bqTable) {
-      const pills   = document.getElementById('fm-column-pills');
-      const loading = document.getElementById('fm-columns-loading');
-      pills.innerHTML = '';
-      pills.classList.add('hidden');
+      const loading   = document.getElementById('fm-columns-loading');
+      const wrap      = document.getElementById('fm-cols-wrap');
+      const recSec    = document.getElementById('fm-rec-section');
+      const otherSec  = document.getElementById('fm-other-section');
+      const recPills  = document.getElementById('fm-rec-pills');
+      const othPills  = document.getElementById('fm-other-pills');
+      const analyzing = document.getElementById('fm-analyzing');
+
+      wrap.classList.add('hidden');
+      recPills.innerHTML = '';
+      othPills.innerHTML = '';
+      recSec.classList.add('hidden');
+      otherSec.classList.add('hidden');
+      analyzing.classList.add('hidden');
+      loading.textContent = 'Loading columns…';
       loading.classList.remove('hidden');
+
       try {
         const r = await fetch(`/api/bq-table-columns?table=${encodeURIComponent(bqTable)}`);
         const payload = await r.json();
         loading.classList.add('hidden');
         if (!r.ok) {
-          loading.textContent = `⚠️ Error ${r.status}: ${payload.detail || 'Unknown error'}`;
+          loading.textContent = `⚠️ ${payload.detail || 'Error loading columns'}`;
           loading.classList.remove('hidden');
           return;
         }
-        const cols = payload;
-        if (!cols.length) return;
-        pills.classList.remove('hidden');
-        pills.classList.add('flex');
-        cols.forEach(col => {
-          const btn = document.createElement('button');
-          btn.type = 'button';
-          btn.textContent = col.name;
-          btn.className = 'px-2 py-0.5 text-xs rounded font-mono transition-colors';
-          btn.style.cssText = 'background:#20232c; color:#818cf8; border:1px solid #2a2d38;';
-          btn.title = col.type;
-          btn.onmouseover = () => btn.style.background = '#2a2d38';
-          btn.onmouseout  = () => btn.style.background = '#20232c';
-          btn.onclick = () => {
-            document.getElementById('fm-field-name').value = col.name;
-            pills.querySelectorAll('button').forEach(b => {
-              b.style.background = '#20232c';
-              b.style.color = '#818cf8';
-              b.style.borderColor = '#2a2d38';
-            });
-            btn.style.background = '#312e81';
-            btn.style.color = '#fff';
-            btn.style.borderColor = '#4f46e5';
-          };
-          pills.appendChild(btn);
-        });
+        if (!payload.length) return;
+
+        // ── Phase 1: heuristic split (instant) ──────────────────────────────
+        const ID_HINTS   = ['_id', 'uuid', 'guid', '_key', '_hash', '_token', 'timestamp', '_at', '_ts'];
+        const stringCols = payload.filter(c => c.type === 'STRING');
+        const nonStr     = payload.filter(c => c.type !== 'STRING');
+
+        function isLikelyId(name) {
+          const n = name.toLowerCase();
+          return n === 'id' || n.endsWith('_id') || ID_HINTS.some(p => n.includes(p));
+        }
+
+        stringCols.filter(c => !isLikelyId(c.name)).forEach(col =>
+          recPills.appendChild(_makeFmPill(col, true, '⏳', `${col.name} · STRING · analysing…`))
+        );
+        stringCols.filter(c =>  isLikelyId(c.name)).forEach(col =>
+          othPills.appendChild(_makeFmPill(col, false, '⚠', `${col.name} · STRING · Likely ID/timestamp`))
+        );
+        nonStr.forEach(col =>
+          othPills.appendChild(_makeFmPill(col, false, col.type, `${col.name} · ${col.type} · Not useful for field value monitoring`))
+        );
+
+        if (recPills.children.length)  recSec.classList.remove('hidden');
+        if (othPills.children.length)  otherSec.classList.remove('hidden');
+        wrap.classList.remove('hidden');
+        if (stringCols.length) analyzing.classList.remove('hidden');
+
+        // ── Phase 2: APPROX uniqueness analysis (non-blocking) ──────────────
+        if (!stringCols.length) return;
+        try {
+          const ra = await fetch(`/api/bq-table-columns/analyze?table=${encodeURIComponent(bqTable)}`);
+          analyzing.classList.add('hidden');
+          if (!ra.ok) return;
+          const analysis = await ra.json();
+
+          // Remove existing STRING pills from both sections
+          recPills.querySelectorAll('button[data-col]').forEach(b => b.remove());
+          othPills.querySelectorAll('button[data-col]').forEach(b => {
+            if (stringCols.find(c => c.name === b.dataset.col)) b.remove();
+          });
+
+          function badgeText(d) {
+            return d.distinct <= 50
+              ? `${d.distinct} vals`
+              : `~${Math.round(d.ratio * 100)}% uniq`;
+          }
+          function makeTip(col, d) {
+            const pct = Math.round(d.ratio * 100);
+            return `${col.name} · STRING\n` +
+              `${d.distinct.toLocaleString()} distinct / ${d.total.toLocaleString()} total (~${pct}% unique)\n` +
+              (d.ratio < 0.8
+                ? '✓ Good candidate for field monitoring'
+                : '⚠ High cardinality — likely not useful for monitoring');
+          }
+
+          for (const col of stringCols) {
+            const d = analysis[col.name];
+            if (!d) continue;
+            const rec = d.ratio < 0.8;
+            (rec ? recPills : othPills).appendChild(_makeFmPill(col, rec, badgeText(d), makeTip(col, d)));
+          }
+
+          recSec.classList.toggle('hidden',  !recPills.children.length);
+          otherSec.classList.toggle('hidden', !othPills.children.length);
+        } catch (_) {
+          analyzing.classList.add('hidden'); // silently keep Phase 1 heuristic
+        }
       } catch (err) {
         loading.textContent = `Could not load columns: ${err.message}`;
+        loading.classList.remove('hidden');
       }
     }
 

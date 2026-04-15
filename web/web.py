@@ -1295,6 +1295,80 @@ async def bq_table_columns(request: Request, table: str):
     except Exception as e:
         raise HTTPException(status_code=404, detail=f"Could not fetch schema: {e}")
 
+@app.get("/api/bq-table-columns/analyze", include_in_schema=False)
+async def analyze_bq_table_columns(request: Request, table: str, date_field: str = "partition_date"):
+    """Run APPROX_COUNT_DISTINCT on STRING columns to estimate uniqueness ratio."""
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if not table or "`" in table or ";" in table or len(table) > 300:
+        raise HTTPException(status_code=400, detail="Invalid table name")
+    parts = table.split(".")
+    if len(parts) != 3:
+        raise HTTPException(status_code=400, detail="Expected project.dataset.table")
+    project, dataset, tbl_name = parts
+    from google.cloud import bigquery as _bq
+    from google.oauth2.credentials import Credentials
+
+    access_token = request.session.get("access_token", "")
+    use_user_creds = bool(access_token and _is_cloud)
+
+    def _exec(sql, params=None):
+        if use_user_creds:
+            creds = Credentials(token=access_token)
+            client = _bq.Client(project=project, credentials=creds)
+            cfg = _bq.QueryJobConfig(query_parameters=params or [])
+            return [dict(r) for r in client.query(sql, job_config=cfg).result()]
+        return bq.run_query(sql, params=params or [], max_rows=500)
+
+    try:
+        string_cols = [
+            r["column_name"]
+            for r in _exec(
+                f"SELECT column_name FROM `{project}.{dataset}.INFORMATION_SCHEMA.COLUMNS` "
+                f"WHERE table_name = @tbl AND data_type = 'STRING' ORDER BY ordinal_position",
+                [_bq.ScalarQueryParameter("tbl", "STRING", tbl_name)],
+            )
+        ]
+        if not string_cols:
+            return {}
+
+        # Use safe positional aliases to avoid reserved-word issues
+        aliases = [f"_c{i}_" for i in range(len(string_cols))]
+        approx_parts = ", ".join(
+            f"APPROX_COUNT_DISTINCT(`{c}`) AS `{a}`"
+            for c, a in zip(string_cols, aliases)
+        )
+
+        rows = None
+        for with_filter in (True, False):
+            try:
+                where = (
+                    f"WHERE `{date_field}` = DATE_SUB(CURRENT_DATE(), INTERVAL 1 DAY)"
+                    if with_filter else ""
+                )
+                rows = _exec(f"SELECT COUNT(*) AS _total, {approx_parts} FROM `{table}` {where}")
+                break
+            except Exception:
+                if not with_filter:
+                    raise
+
+        if not rows:
+            return {}
+
+        row = rows[0]
+        total = int(row.get("_total") or 1)
+        return {
+            c: {
+                "distinct": int(row.get(a) or 0),
+                "total": total,
+                "ratio": round(int(row.get(a) or 0) / total, 3),
+            }
+            for c, a in zip(string_cols, aliases)
+        }
+    except Exception as e:
+        logger.warning("Column analysis failed for %s: %s", table, e)
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.get("/api/field-monitors", include_in_schema=False)
 async def list_field_monitors(request: Request):
     if not _user(request):
