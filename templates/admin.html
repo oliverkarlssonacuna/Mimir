@@ -2110,7 +2110,7 @@
               <span class="text-sm font-mono font-medium" style="color:${checked ? '#818cf8' : '#6b7385'};">${escHtml(f.field_name)}</span>
               ${f.is_array ? `<span class="ml-1.5 text-xs px-1.5 py-0.5 rounded" style="background:#2d2a1a;color:#fbbf24;border:1px solid #4a3f10;">ARRAY</span>` : ''}
               ${f.description ? `<span class="block text-xs mt-0.5" style="color:#9aa0b4;">📋 ${escHtml(f.description.slice(0, 140))}</span>` : ''}
-              <span class="block text-xs mt-0.5" style="color:#4f5668;">${f.distinct.toLocaleString()} distinct / ${f.total.toLocaleString()} total over 60 days</span>
+              <span class="block text-xs mt-0.5" style="color:#4f5668;">${f.total > 0 ? Math.round(f.distinct / f.total * 100) + '% unique' : '0 values'} &middot; ${f.distinct.toLocaleString()} distinct over 60 days</span>
             </div>
           </label>`;
         return `

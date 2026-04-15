@@ -1495,18 +1495,16 @@ async def discover_field_monitors(request: Request):
                 name = field["name"]
 
                 schema_rec = _schema_rec(desc, name)
-                if schema_rec is False:
-                    continue  # explicit bad signal from description → skip entirely
                 if schema_rec is True:
-                    rec = distinct > 0  # has description → recommend unless all NULL
+                    rec = distinct > 0
+                elif schema_rec is False:
+                    rec = False
                 else:
                     # No description: use cardinality
                     if distinct == 0:
-                        continue  # all NULL
-                    rec = (distinct <= 50 or ratio < 0.1) and not _is_id_name(name)
-
-                if not rec:
-                    continue  # don't include non-recommended in suggestions
+                        rec = False
+                    else:
+                        rec = (distinct <= 50 or ratio < 0.1) and not _is_id_name(name)
 
                 suggestions.append({
                     "label": f"{tbl_label} · {name.split('>')[-1].split('.')[-1]}",
@@ -1517,6 +1515,7 @@ async def discover_field_monitors(request: Request):
                     "total": total,
                     "description": desc,
                     "is_array": bool(field["array_parent"]),
+                    "recommended": rec,
                 })
 
         except Exception as e:
