@@ -1983,6 +1983,7 @@
 
     let _discCatalog = null;
     let _discSuggestions = [];
+    let _discChecked = new Set();
 
     async function openDiscoverModal() {
       document.getElementById('discover-modal').classList.remove('hidden');
@@ -2006,6 +2007,7 @@
         const r = await fetch('/api/field-monitors/catalog');
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         _discCatalog = await r.json();
+        _discChecked = new Set(_discCatalog.map((_, i) => i)); // all checked by default on first load
         renderDiscTables(_discCatalog);
       } catch (err) {
         document.getElementById('disc-table-list').innerHTML =
@@ -2016,17 +2018,24 @@
     function renderDiscTables(entries) {
       const list = document.getElementById('disc-table-list');
       if (!entries.length) { list.innerHTML = '<p class="text-xs" style="color:#6b7385;">No catalog entries found.</p>'; return; }
-      list.innerHTML = entries.map((e, i) => `
+      list.innerHTML = entries.map((e, i) => {
+        const isChecked = _discChecked.has(i);
+        return `
         <label class="flex items-start gap-3 px-3 py-2 rounded-lg cursor-pointer hover:bg-opacity-50"
                style="background:#13151a; border:1px solid #2a2d38;">
-          <input type="checkbox" class="disc-tbl-check mt-0.5" data-i="${i}" checked
-            style="accent-color:#4f46e5;">
+          <input type="checkbox" class="disc-tbl-check mt-0.5" data-i="${i}" ${isChecked ? 'checked' : ''}
+            style="accent-color:#4f46e5;" onchange="_discSetChecked(${i}, this.checked)">
           <div>
             <span class="text-sm font-medium" style="color:#c8cdd8;">${escHtml(e.label)}</span>
             <span class="block text-xs font-mono mt-0.5" style="color:#4f5668;">${escHtml(e.bq_table || '')}</span>
           </div>
-        </label>`).join('');
+        </label>`;
+      }).join('');
       document.getElementById('disc-footer-info').textContent = `${entries.length} tables in catalog`;
+    }
+
+    function _discSetChecked(i, val) {
+      if (val) _discChecked.add(i); else _discChecked.delete(i);
     }
 
     function filterDiscTables() {
@@ -2036,14 +2045,13 @@
     }
 
     async function runDiscover() {
-      const checked = [...document.querySelectorAll('.disc-tbl-check:checked')];
-      if (!checked.length) {
+      const tables = [..._discChecked].map(i => _discCatalog[i]).filter(Boolean);
+      if (!tables.length) {
         const err = document.getElementById('disc-step1-error');
         err.textContent = 'Select at least one table.';
         err.classList.remove('hidden');
         return;
       }
-      const tables = checked.map(cb => _discCatalog[parseInt(cb.dataset.i)]);
 
       document.getElementById('disc-step-1').classList.add('hidden');
       document.getElementById('disc-step-2').classList.remove('hidden');
