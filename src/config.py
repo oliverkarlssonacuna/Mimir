@@ -28,6 +28,7 @@ class Config:
     DISCORD_BOT_TOKEN: str = _optional("DISCORD_BOT_TOKEN")
     DISCORD_ALERT_CHANNEL_ID: str = _optional("DISCORD_ALERT_CHANNEL_ID")
     DISCORD_ERROR_CHANNEL_ID: str = _optional("DISCORD_ERROR_CHANNEL_ID")
+    DISCORD_STATUS_CHANNEL_ID: str = _optional("DISCORD_STATUS_CHANNEL_ID", "1494321180646309968")
 
     # BQ snapshot table for Steep metric snapshots
     BQ_SNAPSHOT_TABLE: str = (

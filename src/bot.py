@@ -124,7 +124,7 @@ def _build_field_alert_embed(fa: FieldAlert) -> discord.Embed:
     if len(fa.new_values) > 25:
         desc += f"\n_…and {len(fa.new_values) - 25} more_"
     embed = discord.Embed(
-        title=f"🆕 {fa.label}",
+        title=f"🔔 {fa.label}",
         description=desc,
         color=discord.Color.orange(),
         timestamp=_dt.utcnow(),
@@ -492,7 +492,9 @@ async def monitor_loop():
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
-        await channel.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
+        status_ch = bot.get_channel(int(Config.DISCORD_STATUS_CHANNEL_ID)) if Config.DISCORD_STATUS_CHANNEL_ID else None
+        if status_ch:
+            await status_ch.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
         return
 
     today_str = datetime.now().strftime("%Y-%m-%d")
@@ -506,7 +508,9 @@ async def monitor_loop():
 
     if not new_anomalies:
         logger.info("Monitor: anomalies exist but already alerted today.")
-        await channel.send(f"✅ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
+        status_ch = bot.get_channel(int(Config.DISCORD_STATUS_CHANNEL_ID)) if Config.DISCORD_STATUS_CHANNEL_ID else None
+        if status_ch:
+            await status_ch.send(f"ℹ️ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
         return
 
     grouped = _group_anomalies(new_anomalies)
