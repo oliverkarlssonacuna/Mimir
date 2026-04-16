@@ -58,6 +58,9 @@ _alerted_keys: set[tuple[str, str, str]] = set()
 # (monitor_id, value, date_str) already alerted this session
 _alerted_field_keys: set[tuple[str, str, str]] = set()
 
+# Guard against on_ready firing multiple times on reconnect
+_bot_initialized: bool = False
+
 # Thread ID → metric info for follow-up questions
 _thread_metrics: dict[int, dict] = {}
 
@@ -773,6 +776,11 @@ async def _start_internal_server():
 
 @bot.event
 async def on_ready():
+    global _bot_initialized
+    if _bot_initialized:
+        logger.info("on_ready called again (reconnect) — skipping re-init.")
+        return
+    _bot_initialized = True
     synced = await tree.sync()
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
