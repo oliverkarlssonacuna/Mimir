@@ -113,18 +113,22 @@ def _build_field_alert_embed(fa: FieldAlert) -> discord.Embed:
     plural = "value" if n == 1 else "values"
     table_parts = fa.bq_table.split(".")
     table_short = ".".join(table_parts[-2:]) if len(table_parts) >= 2 else fa.bq_table
+    type_tag = f" · {fa.field_type}" if fa.field_type else ""
+    desc = (
+        f"`{fa.field_name}`{type_tag}\n"
+        f"`{table_short}`\n"
+        f"Not seen {window_start} – {window_end}\n\n"
+        f"**{n} new {plural}**\n"
+        + "\n".join(f"• `{v}`" for v in fa.new_values[:25])
+    )
+    if len(fa.new_values) > 25:
+        desc += f"\n_…and {len(fa.new_values) - 25} more_"
     embed = discord.Embed(
         title=f"🆕 {fa.label}",
+        description=desc,
         color=discord.Color.orange(),
         timestamp=_dt.utcnow(),
     )
-    embed.add_field(name="Field", value=f"`{fa.field_name}`", inline=True)
-    embed.add_field(name="Table", value=f"`{table_short}`", inline=True)
-    embed.add_field(name="Window", value=f"{window_start} – {window_end}", inline=True)
-    vals_text = "\n".join(f"• `{v}`" for v in fa.new_values[:25])
-    if len(fa.new_values) > 25:
-        vals_text += f"\n_…and {len(fa.new_values) - 25} more_"
-    embed.add_field(name=f"{n} new {plural}", value=vals_text, inline=False)
     embed.set_footer(text="Mimir — Field Value Monitor")
     return embed
 
@@ -544,6 +548,7 @@ async def monitor_loop():
             new_values=new_unseen,
             today_date=fa.today_date,
             known_value_count=fa.known_value_count,
+            field_type=fa.field_type,
         )
         try:
             await channel.send(embed=_build_field_alert_embed(fa_with_unseen))

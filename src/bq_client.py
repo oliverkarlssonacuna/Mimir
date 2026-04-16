@@ -327,3 +327,16 @@ class BQClient:
             )
         except Exception as e:
             logger.warning("Failed to persist alert key to BQ: %s", e)
+
+    def get_field_type(self, bq_table: str, field_name: str) -> str:
+        """Return the BQ type (e.g. STRING, INTEGER) for a field. Returns '' on failure."""
+        try:
+            parts = bq_table.split(".")
+            tbl = self.client.get_table(bq_table if len(parts) == 3 else bq_table)
+            leaf = field_name.split(".")[-1].split(">")[-1]
+            for f in tbl.schema:
+                if f.name == leaf:
+                    return f.field_type
+            return ""
+        except Exception:
+            return ""

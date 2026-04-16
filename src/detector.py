@@ -22,6 +22,7 @@ class FieldAlert:
     new_values: list[str]   # values seen today but not in the past 7 days
     today_date: str
     known_value_count: int = 0  # number of distinct values seen in the past 7 days
+    field_type: str = ""        # BQ column type e.g. STRING, INTEGER
 
 
 @dataclass
@@ -97,6 +98,7 @@ class Detector:
                 new_values = sorted(today_values - past_values)
                 if new_values:
                     from datetime import datetime as _dt, timezone as _tz
+                    field_type = self.bq.get_field_type(bq_table, field_name)
                     alerts.append(FieldAlert(
                         monitor_id=monitor_id,
                         label=label,
@@ -105,6 +107,7 @@ class Detector:
                         new_values=new_values,
                         today_date=_dt.now(_tz.utc).strftime("%Y-%m-%d"),
                         known_value_count=len(past_values),
+                        field_type=field_type,
                     ))
             except Exception as e:
                 logger.error("Field monitor check failed for '%s': %s", label, e)
