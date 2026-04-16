@@ -111,19 +111,20 @@ def _build_field_alert_embed(fa: FieldAlert) -> discord.Embed:
     window_end = (today - _td(days=1)).strftime("%b %-d")
     n = len(fa.new_values)
     plural = "value" if n == 1 else "values"
-    # Shorten table path to dataset.table for readability
     table_parts = fa.bq_table.split(".")
     table_short = ".".join(table_parts[-2:]) if len(table_parts) >= 2 else fa.bq_table
     embed = discord.Embed(
-        title=f"🆕 {fa.label} — {fa.field_name}",
-        description=f"**{n} new {plural}** in `{table_short}` not seen {window_start}–{window_end}.",
+        title=f"🆕 {fa.label}",
         color=discord.Color.orange(),
         timestamp=_dt.utcnow(),
     )
+    embed.add_field(name="Field", value=f"`{fa.field_name}`", inline=True)
+    embed.add_field(name="Table", value=f"`{table_short}`", inline=True)
+    embed.add_field(name="Window", value=f"{window_start} – {window_end}", inline=True)
     vals_text = "\n".join(f"• `{v}`" for v in fa.new_values[:25])
     if len(fa.new_values) > 25:
         vals_text += f"\n_…and {len(fa.new_values) - 25} more_"
-    embed.add_field(name=f"New {plural}", value=vals_text, inline=False)
+    embed.add_field(name=f"{n} new {plural}", value=vals_text, inline=False)
     embed.set_footer(text="Mimir — Field Value Monitor")
     return embed
 
