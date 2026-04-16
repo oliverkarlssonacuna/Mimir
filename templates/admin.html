@@ -691,17 +691,16 @@
         <table class="w-full text-sm" id="field-table">
           <thead>
             <tr class="border-b" style="border-color:#2a2d38; background:#171a21;">
-              <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Label</th>
-              <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">BQ Table</th>
-              <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Field</th>
-              <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Date Field</th>
+              <th class="pl-4 pr-2 py-3" style="width:32px;"></th>
+              <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">BQ Table / Label</th>
+              <th class="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Fields</th>
               <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Status</th>
-              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Delete</th>
+              <th class="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide" style="color:#4f5668;">Actions</th>
             </tr>
           </thead>
           <tbody id="field-table-body">
             <tr id="field-loading-row">
-              <td colspan="6" class="py-10 text-center text-sm" style="color:#4f5668;">Loading…</td>
+              <td colspan="5" class="py-10 text-center text-sm" style="color:#4f5668;">Loading…</td>
             </tr>
           </tbody>
         </table>
@@ -1796,45 +1795,103 @@
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const monitors = await r.json();
         if (!monitors.length) {
-          tbody.innerHTML = '<tr><td colspan="6" class="py-10 text-center text-sm" style="color:#4f5668;">No field monitors yet. Click "+ Add Field Monitor" to create one.</td></tr>';
+          tbody.innerHTML = '<tr><td colspan="5" class="py-10 text-center text-sm" style="color:#4f5668;">No field monitors yet. Click "+ Add manually" to create one.</td></tr>';
           return;
         }
-        tbody.innerHTML = monitors.map(m => `
-          <tr class="border-b transition-colors" style="border-color:#1e2028;"
-              onmouseover="this.style.background='#20232c'" onmouseout="this.style.background=''">
-            <td class="px-6 py-4 font-medium text-white">${escHtml(m.label)}</td>
-            <td class="px-6 py-4 font-mono text-xs" style="color:#9aa0b4;">${escHtml(m.bq_table)}</td>
-            <td class="px-4 py-4 font-mono text-xs" style="color:#9aa0b4;">${escHtml(m.field_name)}</td>
-            <td class="px-4 py-4 font-mono text-xs" style="color:#9aa0b4;">${escHtml(m.date_field || 'partition_date')}</td>
-            <td class="px-4 py-4 text-center">
-              <label class="relative inline-flex items-center cursor-pointer">
-                <input type="checkbox" class="sr-only" ${m.enabled ? 'checked' : ''}
-                       onchange="toggleFieldMonitor('${escHtml(m.monitor_id)}', this.checked, this)">
-                <div class="w-10 h-5 rounded-full relative transition-colors"
-                     style="background:${m.enabled ? '#4f46e5' : '#2a2d38'};"
-                     id="fm-track-${escHtml(m.monitor_id)}">
-                  <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
-                       style="left:${m.enabled ? '22px' : '2px'};"
-                       id="fm-thumb-${escHtml(m.monitor_id)}"></div>
-                </div>
-              </label>
-            </td>
-            <td class="px-4 py-4 text-center">
-              <button onclick="deleteFieldMonitor('${escHtml(m.monitor_id)}', '${escHtml(m.label)}')"
-                class="text-xs px-2.5 py-1 rounded-lg border transition-colors"
-                style="border-color:#3d2022; color:#f87171; background:#2d1d20;"
-                onmouseover="this.style.background='#3d2428'" onmouseout="this.style.background='#2d1d20'">
-                Delete
-              </button>
-            </td>
-          </tr>
-        `).join('');
+        // Group by bq_table
+        const grouped = {};
+        for (const m of monitors) {
+          if (!grouped[m.bq_table]) {
+            const baseLabel = m.label.includes(' · ') ? m.label.split(' · ')[0] : m.label;
+            grouped[m.bq_table] = { label: baseLabel, fields: [] };
+          }
+          grouped[m.bq_table].fields.push(m);
+        }
+        let html = '';
+        let gi = 0;
+        for (const [table, group] of Object.entries(grouped)) {
+          const groupId = 'fg' + gi++;
+          const allEnabled = group.fields.every(f => f.enabled);
+          const someEnabled = group.fields.some(f => f.enabled);
+          const fieldCount = group.fields.length;
+          const statusText = allEnabled ? 'All active' : someEnabled ? 'Partial' : 'Disabled';
+          const statusColor = allEnabled ? '#4ade80' : someEnabled ? '#f59e0b' : '#6b7385';
+          // Group header row
+          html += `
+            <tr class="border-b cursor-pointer" id="fg-row-${groupId}"
+                style="border-color:#1e2028; background:#1c1f27;"
+                onclick="toggleFieldGroup('${groupId}')"
+                onmouseover="this.style.background='#20232c'" onmouseout="this.style.background='#1c1f27'">
+              <td class="pl-4 pr-2 py-4" style="width:32px;">
+                <svg id="arrow-${groupId}" class="w-4 h-4" style="color:#4f5668; transform:rotate(0deg); transition:transform 0.15s;" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/>
+                </svg>
+              </td>
+              <td class="px-4 py-4">
+                <div class="font-medium text-white">${escHtml(group.label)}</div>
+                <div class="font-mono text-xs mt-0.5" style="color:#6b7385;">${escHtml(table)}</div>
+              </td>
+              <td class="px-4 py-4">
+                <span class="text-xs px-2 py-0.5 rounded-full" style="background:#252835; color:#9aa0b4;">${fieldCount} field${fieldCount !== 1 ? 's' : ''}</span>
+              </td>
+              <td class="px-4 py-4 text-center">
+                <span id="fg-status-${groupId}" class="text-xs" style="color:${statusColor};">${statusText}</span>
+              </td>
+              <td class="px-4 py-4"></td>
+            </tr>
+          `;
+          // Sub-rows for each field (hidden by default)
+          for (const m of group.fields) {
+            const fieldLabel = m.label.includes(' · ') ? m.label.split(' · ').slice(1).join(' · ') : m.label;
+            html += `
+              <tr class="field-subrow hidden border-b" data-group="${groupId}"
+                  style="border-color:#1e2028; background:#181b22;">
+                <td class="pl-4 pr-2 py-3"></td>
+                <td class="py-3 pl-8 pr-4">
+                  <span class="font-mono text-xs font-medium" style="color:#c8cdd8;">${escHtml(fieldLabel)}</span>
+                  <span class="text-xs ml-2" style="color:#4f5668;">${escHtml(m.date_field || 'partition_date')}</span>
+                </td>
+                <td class="px-4 py-3"></td>
+                <td class="px-4 py-3 text-center">
+                  <label class="relative inline-flex items-center cursor-pointer" onclick="event.stopPropagation()">
+                    <input type="checkbox" class="sr-only" ${m.enabled ? 'checked' : ''}
+                           onchange="toggleFieldMonitor('${escHtml(m.monitor_id)}', this.checked, this, '${groupId}')">
+                    <div class="w-9 h-5 rounded-full relative transition-colors"
+                         style="background:${m.enabled ? '#4f46e5' : '#2a2d38'};"
+                         id="fm-track-${escHtml(m.monitor_id)}">
+                      <div class="absolute top-0.5 h-4 w-4 bg-white rounded-full shadow transition-all"
+                           style="left:${m.enabled ? '20px' : '2px'};"
+                           id="fm-thumb-${escHtml(m.monitor_id)}"></div>
+                    </div>
+                  </label>
+                </td>
+                <td class="py-3 pr-5 text-right">
+                  <button onclick="event.stopPropagation(); deleteFieldMonitor('${escHtml(m.monitor_id)}', '${escHtml(m.label)}')"
+                    class="text-xs px-2.5 py-1 rounded-lg border transition-colors"
+                    style="border-color:#3d2022; color:#f87171; background:#2d1d20;"
+                    onmouseover="this.style.background='#3d2428'" onmouseout="this.style.background='#2d1d20'">
+                    Delete
+                  </button>
+                </td>
+              </tr>
+            `;
+          }
+        }
+        tbody.innerHTML = html;
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="6" class="py-10 text-center text-sm" style="color:#f87171;">Failed to load: ${escHtml(err.message)}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="5" class="py-10 text-center text-sm" style="color:#f87171;">Failed to load: ${escHtml(err.message)}</td></tr>`;
       }
     }
 
-    async function toggleFieldMonitor(monitorId, enabled, checkbox) {
+    function toggleFieldGroup(groupId) {
+      const arrow = document.getElementById(`arrow-${groupId}`);
+      const rows = document.querySelectorAll(`.field-subrow[data-group="${groupId}"]`);
+      const isOpen = rows.length > 0 && !rows[0].classList.contains('hidden');
+      rows.forEach(r => r.classList.toggle('hidden', isOpen));
+      if (arrow) arrow.style.transform = isOpen ? 'rotate(0deg)' : 'rotate(90deg)';
+    }
+
+    async function toggleFieldMonitor(monitorId, enabled, checkbox, groupId) {
       const track = document.getElementById(`fm-track-${monitorId}`);
       const thumb = document.getElementById(`fm-thumb-${monitorId}`);
       try {
@@ -1844,8 +1901,21 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         if (track) track.style.background = enabled ? '#4f46e5' : '#2a2d38';
-        if (thumb) thumb.style.left = enabled ? '22px' : '2px';
+        if (thumb) thumb.style.left = enabled ? '20px' : '2px';
         showToast(enabled ? 'Monitor enabled' : 'Monitor disabled');
+        // Refresh group status badge
+        if (groupId) {
+          const subrows = document.querySelectorAll(`.field-subrow[data-group="${groupId}"]`);
+          const checks = [];
+          subrows.forEach(row => { const cb = row.querySelector('input[type="checkbox"]'); if (cb) checks.push(cb.checked); });
+          const allOn = checks.length > 0 && checks.every(Boolean);
+          const someOn = checks.some(Boolean);
+          const statusEl = document.getElementById(`fg-status-${groupId}`);
+          if (statusEl) {
+            statusEl.textContent = allOn ? 'All active' : someOn ? 'Partial' : 'Disabled';
+            statusEl.style.color = allOn ? '#4ade80' : someOn ? '#f59e0b' : '#6b7385';
+          }
+        }
       } catch (err) {
         checkbox.checked = !enabled;
         showToast(`Error: ${err.message}`, true);
