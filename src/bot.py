@@ -493,13 +493,19 @@ async def monitor_loop():
         except Exception as e:
             logger.error("Failed to send alert for %s: %s", metric_anomalies[0].metric_label, e)
 
-    # ── Field value monitor checks ────────────────────────────────────────
-    try:
-        field_alerts = await loop.run_in_executor(None, detector.check_field_monitors)
-    except Exception as e:
-        logger.error("Field monitor check failed: %s", e, exc_info=True)
-        await error_channel.send(f"\u274c Field monitor check failed: {e}")
+    # ── Field value monitor checks (once per day at configured hour) ──────
+    field_check_hour = int(_get_setting("field_monitor_check_hour", "8"))
+    now_utc = datetime.utcnow()
+    if now_utc.hour != field_check_hour:
+        logger.info("Skipping field monitor check (hour %d UTC, configured for %d UTC).", now_utc.hour, field_check_hour)
         field_alerts = []
+    else:
+        try:
+            field_alerts = await loop.run_in_executor(None, detector.check_field_monitors)
+        except Exception as e:
+            logger.error("Field monitor check failed: %s", e, exc_info=True)
+            await error_channel.send(f"\u274c Field monitor check failed: {e}")
+            field_alerts = []
 
     today_str_fa = datetime.now().strftime("%Y-%m-%d")
     for fa in field_alerts:
@@ -618,6 +624,7 @@ async def _start_internal_server():
     async def handle_reload(request: aiohttp_web.Request) -> aiohttp_web.Response:
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, detector.reload_configs)
+        await loop.run_in_executor(None, _load_runtime_settings)
         count = len(detector._metric_configs)
         logger.info("Internal reload triggered via HTTP: %d metrics loaded.", count)
         return aiohttp_web.Response(
@@ -676,6 +683,8 @@ async def on_ready():
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, bq.ensure_notes_table)
     await loop.run_in_executor(None, bq.ensure_field_monitors_table)
+    await loop.run_in_executor(None, bq.ensure_settings_table)
+    await loop.run_in_executor(None, _load_runtime_settings)
     await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
@@ -939,7 +948,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 f"{trigger_values_block}\n\n"
                 f"## Daily data ({baseline} to {reference_date}) — use for trend/context only:\n"
                 f"{steep_json}\n\n"
-                f"## Game milestones:\n{Config.GAME_MILESTONES}\n\n"
+                f"## Game milestones:\n{_get_setting('game_milestones', Config.GAME_MILESTONES)}\n\n"
                 f"## Jira releases near {reference_date}:\n{jira_context}\n\n"
                 f"## Team context notes:\n{context_notes}\n\n"
                 f"## Correlated metrics (same direction, same day):\n{correlated_metrics}\n\n"

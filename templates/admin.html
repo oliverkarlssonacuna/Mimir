@@ -146,6 +146,11 @@
         style="color:#6b7385; border-color:transparent;">
         Field Monitors
       </button>
+      <button onclick="switchTab('settings')" id="tab-settings"
+        class="tab-btn px-5 py-3 text-sm font-medium transition-colors border-b-2"
+        style="color:#6b7385; border-color:transparent;">
+        Settings
+      </button>
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════════════════ -->
@@ -707,6 +712,80 @@
       </div>
 
     </div><!-- /panel-field -->
+
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <!-- TAB: Settings                                                          -->
+    <!-- ═══════════════════════════════════════════════════════════════════════ -->
+    <div id="panel-settings" class="hidden">
+
+      <div class="mb-6">
+        <h1 class="text-xl font-semibold text-white">Settings</h1>
+        <p class="text-sm mt-1" style="color:#6b7385;">Runtime configuration — changes apply immediately without redeploying.</p>
+      </div>
+
+      <div class="space-y-6 max-w-3xl">
+
+        <!-- Baseline start date + Milestones side by side -->
+        <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+          <h2 class="text-sm font-semibold text-white mb-1">Baseline &amp; Milestones</h2>
+          <p class="text-xs mb-4" style="color:#6b7385;">The baseline date tells Mimir from when data is reliable. Set it in context with your milestones below.</p>
+          <div class="grid grid-cols-2 gap-5">
+            <!-- Left: Baseline date -->
+            <div>
+              <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Baseline Start Date</label>
+              <input type="date" id="setting-baseline-date"
+                class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
+                style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+              <p class="text-xs mt-1.5" style="color:#4f5668;">Data before this date is ignored in anomaly comparisons.</p>
+              <button onclick="saveSetting('baseline_start_date', document.getElementById('setting-baseline-date').value)"
+                class="mt-3 text-sm font-medium px-4 py-1.5 rounded-lg" style="background:#4f46e5; color:#fff;"
+                onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Save date</button>
+            </div>
+            <!-- Right: Milestones list (read from textarea, auto-parsed) -->
+            <div>
+              <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Why this date?</label>
+              <div id="milestone-list" class="space-y-1">
+                <p class="text-xs" style="color:#4f5668;">Loading…</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Game milestones -->
+        <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+          <h2 class="text-sm font-semibold text-white mb-1">Game Milestones</h2>
+          <p class="text-xs mb-3" style="color:#6b7385;">Injected into every deep analysis prompt. One milestone per line, e.g. <span class="font-mono" style="color:#9aa0b4;">Closed Beta: 9 March 2026 – 30 March 2026.</span></p>
+          <textarea id="setting-milestones" rows="8"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono resize-y"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8; line-height:1.6;"
+            oninput="renderMilestoneList()"></textarea>
+          <div class="mt-3 flex items-center gap-3">
+            <button onclick="saveSetting('game_milestones', document.getElementById('setting-milestones').value)"
+              class="text-sm font-medium px-4 py-1.5 rounded-lg" style="background:#4f46e5; color:#fff;"
+              onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Save milestones</button>
+            <span id="milestones-saved-note" class="hidden text-xs" style="color:#4ade80;">Saved</span>
+          </div>
+        </div>
+
+        <!-- Field monitor check hour -->
+        <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+          <h2 class="text-sm font-semibold text-white mb-1">Field Monitor Check Time</h2>
+          <p class="text-xs mb-3" style="color:#6b7385;">Hour (UTC) at which new field values are checked daily. Outside this hour, the check is skipped to reduce costs.</p>
+          <div class="flex items-center gap-3">
+            <select id="setting-check-hour"
+              class="px-3 py-2 text-sm rounded-lg border outline-none"
+              style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+              <!-- options filled by JS -->
+            </select>
+            <span class="text-xs" style="color:#6b7385;">UTC</span>
+            <button onclick="saveSetting('field_monitor_check_hour', document.getElementById('setting-check-hour').value)"
+              class="text-sm font-medium px-4 py-1.5 rounded-lg" style="background:#4f46e5; color:#fff;"
+              onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Save</button>
+          </div>
+        </div>
+
+      </div>
+    </div><!-- /panel-settings -->
 
   </main>
 
@@ -1815,6 +1894,73 @@
       document.getElementById('tab-field').style.color = tab === 'field' ? '#818cf8' : '#6b7385';
       document.getElementById('tab-field').style.borderColor = tab === 'field' ? '#818cf8' : 'transparent';
       if (tab === 'field') loadFieldMonitors();
+      if (tab === 'settings') loadSettings();
+    }
+
+    // ── Settings ──────────────────────────────────────────────────
+
+    async function loadSettings() {
+      try {
+        const r = await fetch('/api/settings');
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const s = await r.json();
+
+        // Baseline date
+        if (s.baseline_start_date) {
+          document.getElementById('setting-baseline-date').value = s.baseline_start_date;
+        } else {
+          document.getElementById('setting-baseline-date').value = '2026-03-09'; // Config default
+        }
+
+        // Milestones
+        const milestones = s.game_milestones || `Pre-Alpha (JOGO): DreamHack demo Nov 2022; FFA playtests Feb 2023; v0.6.0-alpha released May 2023.\nAlpha test: December 2025.\nClosed Beta: 9 March 2026 \u2013 30 March 2026.\nv0.64.0 internal release: 9 April 2026.\nOfficial launch (v1.00): planned 7 May 2026.`;
+        document.getElementById('setting-milestones').value = milestones;
+        renderMilestoneList();
+
+        // Check hour select
+        const sel = document.getElementById('setting-check-hour');
+        sel.innerHTML = Array.from({length: 24}, (_, h) => {
+          const label = `${String(h).padStart(2,'0')}:00`;
+          const selected = String(h) === (s.field_monitor_check_hour || '8') ? 'selected' : '';
+          return `<option value="${h}" ${selected}>${label}</option>`;
+        }).join('');
+
+      } catch (err) {
+        showToast(`Failed to load settings: ${err.message}`, true);
+      }
+    }
+
+    function renderMilestoneList() {
+      const text = document.getElementById('setting-milestones').value;
+      const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+      const baselineDate = document.getElementById('setting-baseline-date').value;
+      const list = document.getElementById('milestone-list');
+      if (!lines.length) { list.innerHTML = '<p class="text-xs" style="color:#4f5668;">No milestones yet.</p>'; return; }
+      list.innerHTML = lines.map(line => {
+        // Highlight lines that contain the baseline date
+        const isBaseline = baselineDate && line.includes(baselineDate);
+        const color = isBaseline ? '#818cf8' : '#6b7385';
+        const marker = isBaseline ? '▶ ' : '• ';
+        return `<div class="text-xs leading-snug" style="color:${color};">${marker}${escHtml(line)}</div>`;
+      }).join('');
+    }
+
+    async function saveSetting(key, value) {
+      try {
+        const r = await fetch(`/api/settings/${key}`, {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({ value: String(value) }),
+        });
+        if (!r.ok) { const d = await r.json(); throw new Error(d.detail || `HTTP ${r.status}`); }
+        showToast('Setting saved');
+        if (key === 'game_milestones') {
+          document.getElementById('milestones-saved-note').classList.remove('hidden');
+          setTimeout(() => document.getElementById('milestones-saved-note').classList.add('hidden'), 2000);
+        }
+        if (key === 'baseline_start_date') renderMilestoneList();
+      } catch (err) {
+        showToast(`Error: ${err.message}`, true);
+      }
     }
 
     // ── Field Monitors ────────────────────────────────────────────────────────

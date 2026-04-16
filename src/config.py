@@ -45,6 +45,10 @@ class Config:
     BQ_FIELD_MONITORS_TABLE: str = (
         "lia-project-sandbox-deletable.anomaly_checks_demo.event_field_monitors"
     )
+    # BQ table for runtime-editable settings (milestones, baseline date, etc.)
+    BQ_SETTINGS_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.mimir_settings"
+    )
     MAX_QUERY_ROWS: int = 200
 
     # Monitor interval – 4 hours (matches Steep cache TTL)

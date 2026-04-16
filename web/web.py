@@ -1595,6 +1595,31 @@ async def delete_field_monitor(monitor_id: str, request: Request):
     await _signal_bot_reload()
     return {"ok": True}
 
+# -> Settings ->
+
+@app.get("/api/settings", include_in_schema=False)
+async def get_settings(request: Request):
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return bq.get_settings()
+
+@app.post("/api/settings/{key}", include_in_schema=False)
+async def upsert_setting(key: str, request: Request):
+    user = _user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    ALLOWED_KEYS = {"game_milestones", "baseline_start_date", "field_monitor_check_hour"}
+    if key not in ALLOWED_KEYS:
+        raise HTTPException(status_code=400, detail=f"Unknown setting key: {key}")
+    body = await request.json()
+    value = body.get("value", "")
+    if not isinstance(value, str):
+        raise HTTPException(status_code=400, detail="value must be a string")
+    bq.upsert_setting(key, value)
+    logger.info("[admin] %s updated setting %s", user["email"], key)
+    await _signal_bot_reload()
+    return {"ok": True}
+
 # -> Local dev entrypoint ->
 
 if __name__ == "__main__":

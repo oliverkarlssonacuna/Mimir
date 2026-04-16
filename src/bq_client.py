@@ -245,3 +245,40 @@ class BQClient:
         if isinstance(v, (datetime.date, datetime.datetime)):
             return v.isoformat()
         return v
+
+    # ── Runtime settings ───────────────────────────────────────────────────
+
+    def ensure_settings_table(self) -> None:
+        self.client.query(
+            f"""CREATE TABLE IF NOT EXISTS `{Config.BQ_SETTINGS_TABLE}` (
+                key        STRING    NOT NULL,
+                value      STRING,
+                updated_at TIMESTAMP
+            )"""
+        ).result()
+
+    def get_settings(self) -> dict[str, str]:
+        """Return all settings as a plain dict."""
+        try:
+            rows = self.run_query(
+                f"SELECT key, value FROM `{Config.BQ_SETTINGS_TABLE}`", max_rows=100
+            )
+            return {r["key"]: r["value"] for r in rows if r.get("key")}
+        except Exception:
+            return {}
+
+    def upsert_setting(self, key: str, value: str) -> None:
+        from google.cloud import bigquery as _bq
+        # DELETE + INSERT is the idiomatic BQ upsert (no MERGE needed for single row)
+        self.run_update(
+            f"DELETE FROM `{Config.BQ_SETTINGS_TABLE}` WHERE key = @key",
+            [_bq.ScalarQueryParameter("key", "STRING", key)],
+        )
+        self.run_update(
+            f"INSERT INTO `{Config.BQ_SETTINGS_TABLE}` (key, value, updated_at) "
+            "VALUES (@key, @value, CURRENT_TIMESTAMP())",
+            [
+                _bq.ScalarQueryParameter("key", "STRING", key),
+                _bq.ScalarQueryParameter("value", "STRING", value),
+            ],
+        )
