@@ -779,6 +779,37 @@
   </div>
 
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <!-- MODAL: Add fields to existing monitor group                            -->
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
+  <div id="add-to-group-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
+       style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-lg mx-4 flex flex-col"
+         style="background:#1c1f27; border-color:#2a2d38; max-height:80vh;">
+      <div class="px-6 py-4 border-b flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
+        <div>
+          <h2 class="text-lg font-semibold text-white">Add fields to monitor</h2>
+          <p id="atg-subtitle" class="font-mono text-xs mt-0.5 truncate" style="color:#6b7385; max-width:340px;"></p>
+        </div>
+        <button onclick="closeAddToGroupModal()" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>
+      </div>
+      <div id="atg-body" class="px-6 py-4 overflow-y-auto flex-1">
+        <p class="text-sm" style="color:#6b7385;">Loading columns…</p>
+      </div>
+      <div id="atg-error" class="hidden mx-6 mb-3 text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
+      <div class="px-6 py-4 border-t flex items-center justify-end gap-3 flex-shrink-0" style="border-color:#2a2d38;">
+        <button onclick="closeAddToGroupModal()"
+          class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
+        <button id="atg-submit-btn" onclick="submitAddToGroup()"
+          class="text-sm font-medium px-5 py-2 rounded-lg" style="background:#4f46e5; color:#fff;">Add selected</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════ -->
   <!-- MODAL: Auto-discover Field Monitors                                    -->
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
   <div id="discover-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
@@ -1811,11 +1842,11 @@
         let gi = 0;
         for (const [table, group] of Object.entries(grouped)) {
           const groupId = 'fg' + gi++;
-          const allEnabled = group.fields.every(f => f.enabled);
-          const someEnabled = group.fields.some(f => f.enabled);
+          const enabledCount = group.fields.filter(f => f.enabled).length;
           const fieldCount = group.fields.length;
-          const statusText = allEnabled ? 'All active' : someEnabled ? 'Partial' : 'Disabled';
-          const statusColor = allEnabled ? '#4ade80' : someEnabled ? '#f59e0b' : '#6b7385';
+          const statusText = enabledCount === 0 ? 'Disabled' : enabledCount === fieldCount ? `${enabledCount} active` : `${enabledCount}/${fieldCount} active`;
+          const statusColor = enabledCount === 0 ? '#6b7385' : enabledCount === fieldCount ? '#4ade80' : '#f59e0b';
+          _fieldGroups[groupId] = { table, label: group.label, dateField: group.fields[0]?.date_field || 'partition_date', existing: group.fields.map(f => f.field_name) };
           // Group header row
           html += `
             <tr class="border-b cursor-pointer" id="fg-row-${groupId}"
@@ -1837,7 +1868,12 @@
               <td class="px-4 py-4 text-center">
                 <span id="fg-status-${groupId}" class="text-xs" style="color:${statusColor};">${statusText}</span>
               </td>
-              <td class="px-4 py-4"></td>
+              <td class="px-4 py-4 text-right pr-5">
+                <button onclick="event.stopPropagation(); openAddToGroupModal('${groupId}')"
+                  class="text-xs px-3 py-1 rounded-lg border transition-colors"
+                  style="border-color:#2a2d38; color:#9aa0b4; background:#13151a;"
+                  onmouseover="this.style.background='#1e2028'" onmouseout="this.style.background='#13151a'">+ Add fields</button>
+              </td>
             </tr>
           `;
           // Sub-rows for each field (hidden by default)
@@ -1908,12 +1944,12 @@
           const subrows = document.querySelectorAll(`.field-subrow[data-group="${groupId}"]`);
           const checks = [];
           subrows.forEach(row => { const cb = row.querySelector('input[type="checkbox"]'); if (cb) checks.push(cb.checked); });
-          const allOn = checks.length > 0 && checks.every(Boolean);
-          const someOn = checks.some(Boolean);
+          const total = checks.length;
+          const activeCount = checks.filter(Boolean).length;
           const statusEl = document.getElementById(`fg-status-${groupId}`);
           if (statusEl) {
-            statusEl.textContent = allOn ? 'All active' : someOn ? 'Partial' : 'Disabled';
-            statusEl.style.color = allOn ? '#4ade80' : someOn ? '#f59e0b' : '#6b7385';
+            statusEl.textContent = activeCount === 0 ? 'Disabled' : activeCount === total ? `${activeCount} active` : `${activeCount}/${total} active`;
+            statusEl.style.color = activeCount === 0 ? '#6b7385' : activeCount === total ? '#4ade80' : '#f59e0b';
           }
         }
       } catch (err) {
@@ -2045,6 +2081,93 @@
       } catch (err) {
         errEl.textContent = err.message;
         errEl.classList.remove('hidden');
+      }
+    }
+
+    // ── Add fields to group ─────────────────────────────────────────────────
+
+    let _fieldGroups = {};
+    let _atgGroupId = null;
+
+    async function openAddToGroupModal(groupId) {
+      _atgGroupId = groupId;
+      const group = _fieldGroups[groupId];
+      if (!group) return;
+      document.getElementById('atg-subtitle').textContent = group.table;
+      document.getElementById('atg-error').classList.add('hidden');
+      document.getElementById('atg-body').innerHTML = '<p class="text-sm" style="color:#6b7385;">Loading columns…</p>';
+      document.getElementById('add-to-group-modal').classList.remove('hidden');
+      try {
+        const r = await fetch(`/api/bq-table-columns?table=${encodeURIComponent(group.table)}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const cols = await r.json();
+        const existing = new Set(group.existing);
+        const available = cols.filter(c => !existing.has(c.name));
+        if (!available.length) {
+          document.getElementById('atg-body').innerHTML = '<p class="text-sm" style="color:#6b7385;">All available columns are already being monitored.</p>';
+          return;
+        }
+        let html = '<div class="space-y-0.5">';
+        for (const col of available) {
+          const safeId = 'atg-cb-' + col.name.replace(/[^a-z0-9]/gi, '_');
+          html += `
+            <label class="flex items-center gap-3 px-3 py-2 rounded-lg cursor-pointer"
+                   style="color:#c8cdd8;"
+                   onmouseover="this.style.background='#20232c'" onmouseout="this.style.background=''">
+              <input type="checkbox" id="${escHtml(safeId)}" data-field="${escHtml(col.name)}" class="atg-field-cb"
+                     style="accent-color:#4f46e5; width:14px; height:14px; flex-shrink:0; cursor:pointer;">
+              <span class="font-mono text-sm">${escHtml(col.name)}</span>
+              ${col.description ? `<span class="text-xs truncate" style="color:#4f5668;">${escHtml(col.description)}</span>` : ''}
+            </label>`;
+        }
+        html += '</div>';
+        document.getElementById('atg-body').innerHTML = html;
+      } catch (err) {
+        document.getElementById('atg-body').innerHTML = `<p class="text-sm" style="color:#f87171;">Failed to load columns: ${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function closeAddToGroupModal() {
+      document.getElementById('add-to-group-modal').classList.add('hidden');
+      _atgGroupId = null;
+    }
+
+    async function submitAddToGroup() {
+      const group = _fieldGroups[_atgGroupId];
+      if (!group) return;
+      const checked = [...document.querySelectorAll('.atg-field-cb:checked')];
+      const errEl = document.getElementById('atg-error');
+      if (!checked.length) {
+        errEl.textContent = 'Select at least one field.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+      errEl.classList.add('hidden');
+      const btn = document.getElementById('atg-submit-btn');
+      btn.disabled = true;
+      btn.textContent = 'Adding…';
+      let failed = 0;
+      for (const cb of checked) {
+        const fieldName = cb.dataset.field;
+        const leafName = fieldName.split('.').pop();
+        const label = `${group.label} · ${leafName}`;
+        try {
+          const r = await fetch('/api/field-monitors', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ label, bq_table: group.table, field_name: fieldName, date_field: group.dateField }),
+          });
+          if (!r.ok) failed++;
+        } catch { failed++; }
+      }
+      btn.disabled = false;
+      btn.textContent = 'Add selected';
+      if (failed) {
+        errEl.textContent = `${failed} field(s) failed to add.`;
+        errEl.classList.remove('hidden');
+      } else {
+        closeAddToGroupModal();
+        showToast(`${checked.length} field${checked.length !== 1 ? 's' : ''} added!`);
+        loadFieldMonitors();
       }
     }
 
