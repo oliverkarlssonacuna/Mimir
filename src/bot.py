@@ -115,9 +115,9 @@ def _build_field_alert_embed(fa: FieldAlert) -> discord.Embed:
     table_short = ".".join(table_parts[-2:]) if len(table_parts) >= 2 else fa.bq_table
     type_tag = f" · {fa.field_type}" if fa.field_type else ""
     desc = (
-        f"`{fa.field_name}`{type_tag}\n"
-        f"`{table_short}`\n"
-        f"Not seen {window_start} – {window_end}\n\n"
+        f"**Table:** `{table_short}`\n"
+        f"**Field:** `{fa.field_name}`{type_tag}\n"
+        f"**Window:** {window_start} – {window_end}\n\n"
         f"**{n} new {plural}**\n"
         + "\n".join(f"• `{v}`" for v in fa.new_values[:25])
     )
