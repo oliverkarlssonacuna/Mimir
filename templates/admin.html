@@ -2107,10 +2107,17 @@
           document.getElementById('atg-body').innerHTML = '<p class="text-sm" style="color:#6b7385;">All available columns are already being monitored.</p>';
           return;
         }
+        // STRING fields first, others after a divider
+        available.sort((a, b) => (b.type === 'STRING') - (a.type === 'STRING'));
 
         let html = '<div class="space-y-0.5">';
+        let dividerShown = false;
         for (const col of available) {
           const isString = col.type === 'STRING';
+          if (!isString && !dividerShown && available.some(c => c.type === 'STRING')) {
+            dividerShown = true;
+            html += `<div class="pt-3 pb-1 px-3 text-xs uppercase tracking-wide" style="color:#3a3f4d; border-top:1px solid #2a2d38; margin-top:8px;">Other types</div>`;
+          }
           const safeId = 'atg-cb-' + col.name.replace(/[^a-z0-9]/gi, '_');
           const typeColor = isString ? '#9aa0b4' : '#4f5668';
           const typeBadge = `<span class="font-mono text-xs" style="color:${typeColor};">${escHtml(col.type)}</span>`;
