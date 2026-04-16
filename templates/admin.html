@@ -767,6 +767,18 @@
           </div>
         </div>
 
+        <!-- Metrics monitor trigger -->
+        <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
+          <h2 class="text-sm font-semibold text-white mb-1">Metrics Monitor</h2>
+          <p class="text-xs mb-3" style="color:#6b7385;">Trigger a full anomaly check right now — WoW, DoD and Pace for all enabled metrics. Ignores dedup so you will always get alerts if anomalies are found.</p>
+          <div class="flex items-center gap-3">
+            <button id="run-monitor-btn" onclick="triggerMonitor()"
+              class="text-sm font-medium px-4 py-1.5 rounded-lg border" style="color:#f59e0b; border-color:#3d3010; background:#1e1a0a;"
+              onmouseover="this.style.background='#2a2410'" onmouseout="this.style.background='#1e1a0a'">▶ Run now (test)</button>
+          </div>
+          <p id="run-monitor-result" class="hidden text-xs mt-2" style="color:#4ade80;"></p>
+        </div>
+
         <!-- Field monitor check hour -->
         <div class="rounded-xl border p-5" style="background:#1c1f27; border-color:#2a2d38;">
           <h2 class="text-sm font-semibold text-white mb-1">Field Monitor Check Time</h2>
@@ -1989,6 +2001,31 @@
       } catch (err) {
         showToast(`Error: ${err.message}`, true);
       }
+    }
+
+    async function triggerMonitor() {
+      const btn = document.getElementById('run-monitor-btn');
+      const result = document.getElementById('run-monitor-result');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      result.classList.add('hidden');
+      try {
+        const r = await fetch('/admin/run-monitor', { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        const msg = data.alerts_sent > 0
+          ? `✓ Done — ${data.alerts_sent} metric(s) with anomalies sent to Discord`
+          : '✓ Done — no anomalies found';
+        result.textContent = msg;
+        result.style.color = data.alerts_sent > 0 ? '#4ade80' : '#6b7385';
+        result.classList.remove('hidden');
+      } catch (err) {
+        result.textContent = `Error: ${err.message}`;
+        result.style.color = '#f87171';
+        result.classList.remove('hidden');
+      }
+      btn.disabled = false;
+      btn.textContent = '▶ Run now (test)';
     }
 
     async function triggerFieldMonitors() {

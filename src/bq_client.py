@@ -282,3 +282,48 @@ class BQClient:
                 _bq.ScalarQueryParameter("value", "STRING", value),
             ],
         )
+
+    # ── Alert dedup log ────────────────────────────────────────────────────
+
+    def ensure_alert_log_table(self) -> None:
+        self.client.query(
+            f"""CREATE TABLE IF NOT EXISTS `{Config.BQ_ALERT_LOG_TABLE}` (
+                alert_type STRING NOT NULL,
+                key1       STRING NOT NULL,
+                key2       STRING NOT NULL,
+                key3       STRING NOT NULL,
+                alerted_at TIMESTAMP
+            )"""
+        ).result()
+
+    def load_today_alert_keys(self, date_str: str) -> list[tuple[str, str, str, str]]:
+        """Return all (alert_type, key1, key2, key3) rows for a given date."""
+        try:
+            from google.cloud import bigquery as _bq
+            rows = self.run_query(
+                f"SELECT alert_type, key1, key2, key3 "
+                f"FROM `{Config.BQ_ALERT_LOG_TABLE}` WHERE key3 = @date",
+                [_bq.ScalarQueryParameter("date", "STRING", date_str)],
+                max_rows=5000,
+            )
+            return [(r["alert_type"], r["key1"], r["key2"], r["key3"]) for r in rows]
+        except Exception:
+            return []
+
+    def log_alert_key(self, alert_type: str, key1: str, key2: str, key3: str) -> None:
+        """Persist a sent-alert dedup key to BQ so it survives restarts."""
+        try:
+            from google.cloud import bigquery as _bq
+            self.run_update(
+                f"INSERT INTO `{Config.BQ_ALERT_LOG_TABLE}` "
+                "(alert_type, key1, key2, key3, alerted_at) "
+                "VALUES (@t, @k1, @k2, @k3, CURRENT_TIMESTAMP())",
+                [
+                    _bq.ScalarQueryParameter("t",  "STRING", alert_type),
+                    _bq.ScalarQueryParameter("k1", "STRING", key1),
+                    _bq.ScalarQueryParameter("k2", "STRING", key2),
+                    _bq.ScalarQueryParameter("k3", "STRING", key3),
+                ],
+            )
+        except Exception as e:
+            logger.warning("Failed to persist alert key to BQ: %s", e)

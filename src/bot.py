@@ -716,6 +716,42 @@ async def _start_internal_server():
         )
 
     internal_app.router.add_post("/internal/run-field-monitors", handle_run_field_monitors)
+
+    async def handle_run_monitor(request: aiohttp_web.Request) -> aiohttp_web.Response:
+        """Trigger a full metrics anomaly check, bypassing dedup — for debug/testing."""
+        alert_channel_id = Config.DISCORD_ALERT_CHANNEL_ID
+        channel = bot.get_channel(int(alert_channel_id)) if alert_channel_id else None
+        loop = asyncio.get_running_loop()
+        try:
+            anomalies, failed_labels = await loop.run_in_executor(
+                None, lambda: detector.collect_and_check()
+            )
+        except Exception as e:
+            logger.error("Manual monitor check failed: %s", e)
+            return aiohttp_web.Response(
+                text=f'{{"ok": false, "error": "{e}"}}',
+                content_type="application/json",
+            )
+        if not anomalies or not channel:
+            return aiohttp_web.Response(
+                text=f'{{"ok": true, "alerts_sent": 0, "anomalies": 0}}',
+                content_type="application/json",
+            )
+        grouped = _group_anomalies(anomalies)
+        sent = 0
+        for metric_anomalies in grouped.values():
+            try:
+                asyncio.create_task(send_grouped_anomaly_alert(channel, metric_anomalies))
+                sent += 1
+            except Exception as e:
+                logger.error("Manual monitor: failed to send for %s: %s", metric_anomalies[0].metric_label, e)
+        logger.info("Manual monitor check: %d anomaly groups sent.", sent)
+        return aiohttp_web.Response(
+            text=f'{{"ok": true, "alerts_sent": {sent}, "anomalies": {len(anomalies)}}}',
+            content_type="application/json",
+        )
+
+    internal_app.router.add_post("/internal/run-monitor", handle_run_monitor)
     runner = aiohttp_web.AppRunner(internal_app)
     await runner.setup()
     site = aiohttp_web.TCPSite(runner, "0.0.0.0", Config.BOT_INTERNAL_PORT)

@@ -124,6 +124,20 @@ async def run_field_monitors(request: Request):
         logger.warning("Could not trigger field monitor check: %s", exc)
         return {"ok": False, "error": str(exc)}
 
+@app.post("/admin/run-monitor", include_in_schema=False)
+async def run_monitor(request: Request):
+    """Trigger a full metrics anomaly check immediately (bypasses dedup)."""
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            r = await client.post(f"{_BOT_INTERNAL_URL}/internal/run-monitor")
+            return r.json()
+    except Exception as exc:
+        logger.warning("Could not trigger monitor check: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
 @app.post("/admin/reset", include_in_schema=False)
 
 async def reset_bot(request: Request):
