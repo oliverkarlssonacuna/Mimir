@@ -473,11 +473,17 @@ async def monitor_loop():
         await error_channel.send(f"❌ Monitor check failed: {e}")
         return
 
-    failed_count = len(failed_labels)
-    checked_count = total_metrics - failed_count
+    unique_failed = len({lbl for lbl, _ in failed_labels})
+    checked_count = total_metrics - unique_failed
 
     if failed_labels:
         now_cest = datetime.utcnow() + timedelta(hours=2)
+        # Deduplicate by metric label — keep only the first (root cause) error per metric
+        seen: dict[str, str] = {}
+        for lbl, err in failed_labels:
+            if lbl not in seen:
+                seen[lbl] = err
+        unique_count = len(seen)
         embed = discord.Embed(
             title="⚠️ Mimir – fetch errors",
             color=discord.Color.orange(),
@@ -485,11 +491,8 @@ async def monitor_loop():
         )
         embed.add_field(name="Time (CEST)", value=now_cest.strftime("%Y-%m-%d %H:%M"), inline=True)
         embed.add_field(name="Coverage", value=f"`{checked_count}/{total_metrics}` metrics checked", inline=True)
-        by_error: dict[str, list[str]] = {}
-        for lbl, err in failed_labels:
-            by_error.setdefault(err, []).append(lbl)
-        lines = [f"**{et}**: {', '.join(f'`{l}`' for l in ls)}" for et, ls in by_error.items()]
-        embed.add_field(name=f"Failed metrics ({failed_count})", value="\n".join(lines), inline=False)
+        lines = [f"• `{lbl}` — {err}" for lbl, err in seen.items()]
+        embed.add_field(name=f"Failed metrics ({unique_count})", value="\n".join(lines), inline=False)
         embed.set_footer(text="Mimir — Error Monitor")
         await error_channel.send(embed=embed)
 
