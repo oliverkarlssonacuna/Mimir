@@ -110,6 +110,20 @@ async def _signal_bot_reload() -> None:
 
         logger.warning("Could not signal bot reload: %s", exc)
 
+@app.post("/admin/run-field-monitors", include_in_schema=False)
+async def run_field_monitors(request: Request):
+    """Trigger an immediate field monitor check (bypasses time gate)."""
+    if not _user(request):
+        raise HTTPException(status_code=401, detail="Not authenticated.")
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            r = await client.post(f"{_BOT_INTERNAL_URL}/internal/run-field-monitors")
+            return r.json()
+    except Exception as exc:
+        logger.warning("Could not trigger field monitor check: %s", exc)
+        return {"ok": False, "error": str(exc)}
+
 @app.post("/admin/reset", include_in_schema=False)
 
 async def reset_bot(request: Request):

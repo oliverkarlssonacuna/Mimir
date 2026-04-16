@@ -684,6 +684,39 @@ async def _start_internal_server():
     internal_app.router.add_post("/internal/reload", handle_reload)
     internal_app.router.add_post("/internal/reset", handle_reset)
     internal_app.router.add_get("/internal/status", handle_status)
+
+    async def handle_run_field_monitors(request: aiohttp_web.Request) -> aiohttp_web.Response:
+        """Trigger an immediate field monitor check, bypassing the time gate."""
+        alert_channel_id = Config.DISCORD_ALERT_CHANNEL_ID
+        channel = bot.get_channel(int(alert_channel_id)) if alert_channel_id else None
+        loop = asyncio.get_running_loop()
+        try:
+            field_alerts = await loop.run_in_executor(None, detector.check_field_monitors)
+        except Exception as e:
+            logger.error("Manual field monitor check failed: %s", e)
+            return aiohttp_web.Response(
+                text=f'{{"ok": false, "error": "{e}"}}',
+                content_type="application/json",
+            )
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        sent = 0
+        for fa in field_alerts:
+            new_unseen = [v for v in fa.new_values if (fa.monitor_id, v, today_str) not in _alerted_field_keys]
+            if not new_unseen or not channel:
+                continue
+            for v in new_unseen:
+                _alerted_field_keys.add((fa.monitor_id, v, today_str))
+            fa2 = FieldAlert(monitor_id=fa.monitor_id, label=fa.label, field_name=fa.field_name,
+                             new_values=new_unseen, today_date=fa.today_date)
+            asyncio.create_task(channel.send(embed=_build_field_alert_embed(fa2)))
+            sent += 1
+        logger.info("Manual field monitor check: %d alerts sent.", sent)
+        return aiohttp_web.Response(
+            text=f'{{"ok": true, "alerts_sent": {sent}}}',
+            content_type="application/json",
+        )
+
+    internal_app.router.add_post("/internal/run-field-monitors", handle_run_field_monitors)
     runner = aiohttp_web.AppRunner(internal_app)
     await runner.setup()
     site = aiohttp_web.TCPSite(runner, "0.0.0.0", Config.BOT_INTERNAL_PORT)

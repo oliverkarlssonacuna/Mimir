@@ -781,7 +781,11 @@
             <button onclick="saveSetting('field_monitor_check_hour', document.getElementById('setting-check-hour').value)"
               class="text-sm font-medium px-4 py-1.5 rounded-lg" style="background:#4f46e5; color:#fff;"
               onmouseover="this.style.background='#4338ca'" onmouseout="this.style.background='#4f46e5'">Save</button>
+            <button id="run-field-btn" onclick="triggerFieldMonitors()"
+              class="text-sm font-medium px-4 py-1.5 rounded-lg border" style="color:#f59e0b; border-color:#3d3010; background:#1e1a0a;"
+              onmouseover="this.style.background='#2a2410'" onmouseout="this.style.background='#1e1a0a'">▶ Run now (test)</button>
           </div>
+          <p id="run-field-result" class="hidden text-xs mt-2" style="color:#4ade80;"></p>
         </div>
 
       </div>
@@ -789,13 +793,13 @@
 
   </main>
 
-  <!-- MODAL: Add Field Monitor (manual, simple)                             -->
+  <!-- MODAL: Add Field Monitor (manual)                                    -->
   <!-- ═══════════════════════════════════════════════════════════════════════ -->
   <div id="add-field-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center"
        style="background:rgba(0,0,0,0.6); backdrop-filter:blur(4px);">
-    <div class="rounded-2xl border shadow-2xl w-full max-w-lg mx-4 overflow-hidden flex flex-col"
-         style="background:#1c1f27; border-color:#2a2d38;">
-      <div class="px-6 py-4 border-b flex items-center justify-between" style="border-color:#2a2d38;">
+    <div class="rounded-2xl border shadow-2xl w-full max-w-lg mx-4 flex flex-col"
+         style="background:#1c1f27; border-color:#2a2d38; max-height:90vh;">
+      <div class="px-6 py-4 border-b flex items-center justify-between flex-shrink-0" style="border-color:#2a2d38;">
         <h2 class="text-lg font-semibold text-white">Add Field Monitor</h2>
         <button onclick="closeAddFieldModal()" class="p-1 rounded opacity-50 hover:opacity-100" style="color:#9aa0b4;">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -803,7 +807,7 @@
           </svg>
         </button>
       </div>
-      <div class="px-6 py-5 space-y-4">
+      <div class="px-6 py-5 space-y-4 overflow-y-auto flex-1">
         <!-- Catalog picker -->
         <div>
           <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Pick from catalog <span style="color:#4f5668;">(or fill in manually below)</span></label>
@@ -820,23 +824,11 @@
             </div>
           </div>
         </div>
-        <div>
-          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Monitor Name *</label>
-          <input type="text" id="fm-label" placeholder="e.g. Character Class Values"
-            class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
-            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
-        </div>
-        <div>
-          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">BQ Table *</label>
-          <input type="text" id="fm-bq-table" placeholder="project.dataset.table"
-            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
-            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
-        </div>
         <div class="grid grid-cols-2 gap-3">
           <div>
-            <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Field Name *</label>
-            <input type="text" id="fm-field-name" placeholder="e.g. character_class"
-              class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
+            <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">Monitor Name *</label>
+            <input type="text" id="fm-label" placeholder="e.g. Ball Position Events"
+              class="w-full px-3 py-2 text-sm rounded-lg border outline-none"
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
           <div>
@@ -846,9 +838,23 @@
               style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
           </div>
         </div>
+        <div>
+          <label class="block text-xs font-medium mb-1.5" style="color:#9aa0b4;">BQ Table *</label>
+          <input type="text" id="fm-bq-table" placeholder="project.dataset.table"
+            class="w-full px-3 py-2 text-sm rounded-lg border outline-none font-mono"
+            style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+        </div>
+        <!-- Dynamic field rows -->
+        <div>
+          <div class="flex items-center justify-between mb-1.5">
+            <label class="text-xs font-medium" style="color:#9aa0b4;">Fields to monitor *</label>
+            <button onclick="addFmFieldRow()" class="text-xs px-2 py-0.5 rounded" style="color:#818cf8; background:#1e2030;">+ Add field</button>
+          </div>
+          <div id="fm-fields-list" class="space-y-2"></div>
+        </div>
         <div id="fm-error" class="hidden text-xs rounded-lg px-3 py-2" style="background:#2d1d20; color:#f87171;"></div>
       </div>
-      <div class="px-6 py-4 border-t flex items-center justify-end gap-3" style="border-color:#2a2d38;">
+      <div class="px-6 py-4 border-t flex items-center justify-end gap-3 flex-shrink-0" style="border-color:#2a2d38;">
         <button onclick="closeAddFieldModal()"
           class="text-sm px-4 py-2 rounded-lg border" style="color:#6b7385; border-color:#2a2d38;">Cancel</button>
         <button onclick="submitAddFieldMonitor()"
@@ -1985,6 +1991,31 @@
       }
     }
 
+    async function triggerFieldMonitors() {
+      const btn = document.getElementById('run-field-btn');
+      const result = document.getElementById('run-field-result');
+      btn.disabled = true;
+      btn.textContent = 'Running…';
+      result.classList.add('hidden');
+      try {
+        const r = await fetch('/admin/run-field-monitors', { method: 'POST' });
+        const data = await r.json();
+        if (!r.ok || !data.ok) throw new Error(data.error || `HTTP ${r.status}`);
+        const msg = data.alerts_sent > 0
+          ? `✓ Done — ${data.alerts_sent} alert(s) sent to Discord`
+          : '✓ Done — no new values found';
+        result.textContent = msg;
+        result.style.color = data.alerts_sent > 0 ? '#4ade80' : '#6b7385';
+        result.classList.remove('hidden');
+      } catch (err) {
+        result.textContent = `Error: ${err.message}`;
+        result.style.color = '#f87171';
+        result.classList.remove('hidden');
+      }
+      btn.disabled = false;
+      btn.textContent = '▶ Run now (test)';
+    }
+
     // ── Field Monitors ────────────────────────────────────────────────────────
 
     async function loadFieldMonitors() {
@@ -2141,12 +2172,13 @@
     function openAddFieldModal() {
       document.getElementById('fm-label').value = '';
       document.getElementById('fm-bq-table').value = '';
-      document.getElementById('fm-field-name').value = '';
       document.getElementById('fm-date-field').value = '';
       document.getElementById('fm-catalog-search').value = '';
       document.getElementById('fm-catalog-items').innerHTML = '';
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
       document.getElementById('fm-error').classList.add('hidden');
+      document.getElementById('fm-fields-list').innerHTML = '';
+      addFmFieldRow(); // start with one empty field row
       _fmCatalog = null;
       document.getElementById('add-field-modal').classList.remove('hidden');
       setTimeout(() => document.getElementById('fm-catalog-search').focus(), 50);
@@ -2217,7 +2249,28 @@
       document.getElementById('fm-label').value = entry.label;
       document.getElementById('fm-bq-table').value = entry.bq_table;
       document.getElementById('fm-catalog-dropdown').classList.add('hidden');
-      // No column analysis in manual modal — user types field name
+      // Reset field rows when catalog selection changes
+      document.getElementById('fm-fields-list').innerHTML = '';
+      addFmFieldRow();
+    }
+
+    function addFmFieldRow() {
+      const list = document.getElementById('fm-fields-list');
+      const idx = list.children.length;
+      const row = document.createElement('div');
+      row.className = 'flex items-center gap-2';
+      row.dataset.idx = idx;
+      row.innerHTML = `
+        <input type="text" placeholder="e.g. game_mode" data-fm-field
+          class="flex-1 px-3 py-2 text-sm rounded-lg border outline-none font-mono"
+          style="background:#13151a; border-color:#2a2d38; color:#c8cdd8;">
+        <button onclick="this.parentElement.remove()" class="p-1.5 rounded opacity-40 hover:opacity-80" style="color:#f87171;" title="Remove">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
+          </svg>
+        </button>`;
+      list.appendChild(row);
+      row.querySelector('[data-fm-field]').focus();
     }
 
     function closeAddFieldModal() {
@@ -2227,28 +2280,35 @@
     async function submitAddFieldMonitor() {
       const label     = document.getElementById('fm-label').value.trim();
       const bqTable   = document.getElementById('fm-bq-table').value.trim();
-      const fieldName = document.getElementById('fm-field-name').value.trim();
       const dateField = document.getElementById('fm-date-field').value.trim() || 'partition_date';
-      const errEl     = document.getElementById('fm-error');
-      if (!label || !bqTable || !fieldName) {
-        errEl.textContent = 'Monitor Name, BQ Table and Field Name are required.';
+      const fieldInputs = [...document.querySelectorAll('#fm-fields-list [data-fm-field]')];
+      const fieldNames  = fieldInputs.map(i => i.value.trim()).filter(Boolean);
+      const errEl = document.getElementById('fm-error');
+      if (!label || !bqTable || !fieldNames.length) {
+        errEl.textContent = 'Monitor Name, BQ Table and at least one Field are required.';
         errEl.classList.remove('hidden');
         return;
       }
       errEl.classList.add('hidden');
-      try {
-        const r = await fetch('/api/field-monitors', {
-          method: 'POST', headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({ label, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
-        });
-        const data = await r.json();
-        if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
-        closeAddFieldModal();
-        showToast('Field monitor added!');
-        loadFieldMonitors();
-      } catch (err) {
-        errEl.textContent = err.message;
+      let failed = 0;
+      for (const fieldName of fieldNames) {
+        const leafName = fieldName.split('.').pop();
+        const fullLabel = fieldNames.length === 1 ? label : `${label} · ${leafName}`;
+        try {
+          const r = await fetch('/api/field-monitors', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({ label: fullLabel, bq_table: bqTable, field_name: fieldName, date_field: dateField }),
+          });
+          if (!r.ok) failed++;
+        } catch { failed++; }
+      }
+      if (failed) {
+        errEl.textContent = `${failed} field(s) failed to add.`;
         errEl.classList.remove('hidden');
+      } else {
+        closeAddFieldModal();
+        showToast(`${fieldNames.length} field monitor${fieldNames.length !== 1 ? 's' : ''} added!`);
+        loadFieldMonitors();
       }
     }
 
