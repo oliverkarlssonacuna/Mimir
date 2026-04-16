@@ -116,10 +116,10 @@ def _build_field_alert_embed(fa: FieldAlert) -> discord.Embed:
     type_tag = f" · {fa.field_type}" if fa.field_type else ""
     desc = (
         f"**Table:** `{table_short}`\n"
-        f"**Field:** `{fa.field_name}`{type_tag}\n"
+        f"**Field:** `{fa.field_name}`\n"
         f"**Window:** {window_start} – {window_end}\n\n"
         f"**{n} new {plural}**\n"
-        + "\n".join(f"• `{v}`" for v in fa.new_values[:25])
+        + "\n".join(f"• `{v}`{type_tag}" for v in fa.new_values[:25])
     )
     if len(fa.new_values) > 25:
         desc += f"\n_…and {len(fa.new_values) - 25} more_"
