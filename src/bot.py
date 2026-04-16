@@ -135,6 +135,23 @@ percent_metric_ids = {m["metric_id"] for m in detector._metric_configs if m.get(
 agent = Agent(config=Config, bq_client=bq, steep_client=steep, percent_metric_ids=percent_metric_ids)
 
 
+# ── Runtime settings (editable from admin UI, override Config defaults) ───────
+
+_runtime_settings: dict[str, str] = {}
+
+def _load_runtime_settings() -> None:
+    """Load settings from BQ and apply to Config where relevant."""
+    global _runtime_settings
+    _runtime_settings = bq.get_settings()
+    baseline = _runtime_settings.get("baseline_start_date", "")
+    if baseline:
+        Config.BASELINE_START_DATE = baseline
+    logger.info("Runtime settings loaded: %s", list(_runtime_settings.keys()))
+
+def _get_setting(key: str, default: str = "") -> str:
+    return _runtime_settings.get(key, default)
+
+
 # ── Alert color/emoji ────────────────────────────────────────────────────────
 
 def _alert_color(anomaly: Anomaly) -> discord.Color:
