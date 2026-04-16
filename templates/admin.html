@@ -1887,12 +1887,15 @@
       document.getElementById('panel-steep').classList.toggle('hidden', tab !== 'steep');
       document.getElementById('panel-bq').classList.toggle('hidden', tab !== 'bq');
       document.getElementById('panel-field').classList.toggle('hidden', tab !== 'field');
+      document.getElementById('panel-settings').classList.toggle('hidden', tab !== 'settings');
       document.getElementById('tab-steep').style.color = tab === 'steep' ? '#818cf8' : '#6b7385';
       document.getElementById('tab-steep').style.borderColor = tab === 'steep' ? '#818cf8' : 'transparent';
       document.getElementById('tab-bq').style.color = tab === 'bq' ? '#818cf8' : '#6b7385';
       document.getElementById('tab-bq').style.borderColor = tab === 'bq' ? '#818cf8' : 'transparent';
       document.getElementById('tab-field').style.color = tab === 'field' ? '#818cf8' : '#6b7385';
       document.getElementById('tab-field').style.borderColor = tab === 'field' ? '#818cf8' : 'transparent';
+      document.getElementById('tab-settings').style.color = tab === 'settings' ? '#818cf8' : '#6b7385';
+      document.getElementById('tab-settings').style.borderColor = tab === 'settings' ? '#818cf8' : 'transparent';
       if (tab === 'field') loadFieldMonitors();
       if (tab === 'settings') loadSettings();
     }
