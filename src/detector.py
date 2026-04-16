@@ -17,9 +17,11 @@ logger = logging.getLogger(__name__)
 class FieldAlert:
     monitor_id: str
     label: str
+    bq_table: str
     field_name: str
     new_values: list[str]   # values seen today but not in the past 7 days
     today_date: str
+    known_value_count: int = 0  # number of distinct values seen in the past 7 days
 
 
 @dataclass
@@ -98,9 +100,11 @@ class Detector:
                     alerts.append(FieldAlert(
                         monitor_id=monitor_id,
                         label=label,
+                        bq_table=bq_table,
                         field_name=field_name,
                         new_values=new_values,
                         today_date=_dt.now(_tz.utc).strftime("%Y-%m-%d"),
+                        known_value_count=len(past_values),
                     ))
             except Exception as e:
                 logger.error("Field monitor check failed for '%s': %s", label, e)
