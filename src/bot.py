@@ -702,18 +702,12 @@ async def _start_internal_server():
                 text=f'{{"ok": false, "error": "{e}"}}',
                 content_type="application/json",
             )
-        today_str = datetime.now().strftime("%Y-%m-%d")
         sent = 0
         for fa in field_alerts:
-            new_unseen = [v for v in fa.new_values if (fa.monitor_id, v, today_str) not in _alerted_field_keys]
-            if not new_unseen or not channel:
+            if not channel:
                 continue
-            for v in new_unseen:
-                _alerted_field_keys.add((fa.monitor_id, v, today_str))
-            fa2 = FieldAlert(monitor_id=fa.monitor_id, label=fa.label, bq_table=fa.bq_table,
-                             field_name=fa.field_name, new_values=new_unseen,
-                             today_date=fa.today_date, known_value_count=fa.known_value_count)
-            asyncio.create_task(channel.send(embed=_build_field_alert_embed(fa2)))
+            # Debug trigger: ignore dedup, always send all detected values
+            asyncio.create_task(channel.send(embed=_build_field_alert_embed(fa)))
             sent += 1
         logger.info("Manual field monitor check: %d alerts sent.", sent)
         return aiohttp_web.Response(
