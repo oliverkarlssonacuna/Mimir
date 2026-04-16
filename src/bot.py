@@ -496,6 +496,7 @@ async def monitor_loop():
         key = (a.metric_id, a.comparison, today_str)
         if key not in _alerted_keys:
             _alerted_keys.add(key)
+            bq.log_alert_key("metric", a.metric_id, a.comparison, today_str)
             new_anomalies.append(a)
 
     if not new_anomalies:
@@ -533,6 +534,7 @@ async def monitor_loop():
             continue
         for v in new_unseen:
             _alerted_field_keys.add((fa.monitor_id, v, today_str_fa))
+            bq.log_alert_key("field", fa.monitor_id, v, today_str_fa)
         fa_with_unseen = FieldAlert(
             monitor_id=fa.monitor_id,
             label=fa.label,
@@ -764,12 +766,21 @@ async def on_ready():
     synced = await tree.sync()
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
-    # Ensure context notes table exists in BQ
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(None, bq.ensure_notes_table)
     await loop.run_in_executor(None, bq.ensure_field_monitors_table)
     await loop.run_in_executor(None, bq.ensure_settings_table)
+    await loop.run_in_executor(None, bq.ensure_alert_log_table)
     await loop.run_in_executor(None, _load_runtime_settings)
+    # Restore today's alerted keys from BQ so restarts don't resend alerts
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    rows = await loop.run_in_executor(None, lambda: bq.load_today_alert_keys(today_str))
+    for alert_type, k1, k2, k3 in rows:
+        if alert_type == "metric":
+            _alerted_keys.add((k1, k2, k3))
+        elif alert_type == "field":
+            _alerted_field_keys.add((k1, k2, k3))
+    logger.info("Restored %d metric + %d field alert keys from BQ.", len(_alerted_keys), len(_alerted_field_keys))
     await _start_internal_server()
     if not monitor_loop.is_running():
         monitor_loop.start()
