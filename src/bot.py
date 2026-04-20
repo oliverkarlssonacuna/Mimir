@@ -742,7 +742,7 @@ async def _start_internal_server():
         loop = asyncio.get_running_loop()
         try:
             anomalies, failed_labels = await loop.run_in_executor(
-                None, lambda: detector.collect_and_check()
+                None, lambda: detector.collect_and_check(force_pace=True)
             )
         except Exception as e:
             logger.error("Manual monitor check failed: %s", e)

@@ -131,11 +131,12 @@ class Detector:
 
     # ── Main entry point ──────────────────────────────────────────────────    
 
-    def collect_and_check(self, progress_callback=None) -> tuple[list[Anomaly], list[tuple[str, str]]]:
+    def collect_and_check(self, progress_callback=None, force_pace: bool = False) -> tuple[list[Anomaly], list[tuple[str, str]]]:
         """Collect snapshots from Steep, save to BQ, run comparisons.
 
         Returns (anomalies, failed_labels) where failed_labels is a list of (label, error_str).
         progress_callback: optional callable(current, total, label) called after each metric.
+        force_pace: if True, always include a pace anomaly (scanning back in BQ if needed) — for debug runs only.
         """
         now = datetime.now(timezone.utc)
         current_hour = now.hour
@@ -185,7 +186,7 @@ class Detector:
             }
             display_format = metric.get("display_format") or "number"
             result.extend(
-                self._check_metric(metric_id, label, direction, today_str, current_hour, value, metric_thresholds, historical, display_format)
+                self._check_metric(metric_id, label, direction, today_str, current_hour, value, metric_thresholds, historical, display_format, force_pace=force_pace)
             )
 
             with _lock:
@@ -677,11 +678,13 @@ class Detector:
         metric_thresholds: dict,
         historical: dict[str, float] | None = None,
         display_format: str = "number",
+        force_pace: bool = False,
     ) -> list[Anomaly]:
         """Run pace, DoD, and WoW checks for one metric.
 
         Pace uses BQ snapshots: today at current hour vs same weekday last week at same hour.
         DoD and WoW uses Steep historical data direkt (alltid korrekt slutvärde).
+        force_pace: if True and no pace anomaly found now, scan back 30 days for the most recent one.
         """
         from datetime import timedelta
 
@@ -707,6 +710,14 @@ class Detector:
             )
             if anomaly:
                 anomalies.append(anomaly)
+
+        # force_pace: if still no pace anomaly, scan back for the most recent one (debug runs only)
+        if force_pace and not any(a.comparison == "pace" for a in anomalies):
+            fallback = self._scan_for_pace_anomaly(
+                metric_id, label, direction, today, current_hour, metric_thresholds, display_format
+            )
+            if fallback:
+                anomalies.append(fallback)
 
         # DoD check: yesterday vs day-before (Steep – alltid korrekt slutvärde)
         yesterday_val = historical.get(yesterday.isoformat())
@@ -741,6 +752,69 @@ class Detector:
                 anomalies.append(anomaly)
 
         return anomalies
+
+    def _scan_for_pace_anomaly(
+        self, metric_id: str, label: str, direction: str,
+        today, current_hour: int,
+        metric_thresholds: dict, display_format: str,
+    ) -> "Anomaly | None":
+        """Scan back up to 30 days to find the most recent pace anomaly in BQ snapshots.
+
+        Used only by force_pace=True (debug/test runs) when the current pace check finds nothing.
+        Returns the most recent past day where the pace threshold was exceeded.
+        """
+        from datetime import timedelta
+        from google.cloud import bigquery as _bq
+
+        lookback_start = today - timedelta(days=37)
+        sql = (
+            f"SELECT snapshot_date, snapshot_hour, cumulative_value "
+            f"FROM `{Config.BQ_SNAPSHOT_TABLE}` "
+            "WHERE metric_id = @metric_id "
+            "AND snapshot_date >= @start_date "
+            "AND snapshot_date <= @today "
+            "ORDER BY snapshot_date DESC, snapshot_hour DESC"
+        )
+        params = [
+            _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+            _bq.ScalarQueryParameter("start_date", "DATE", lookback_start.isoformat()),
+            _bq.ScalarQueryParameter("today", "DATE", today.isoformat()),
+        ]
+        rows = self.bq.run_query(sql, params=params)
+
+        # Build: date_str -> list of (hour, value)
+        by_date: dict[str, list[tuple[int, float]]] = {}
+        for r in rows:
+            d = str(r["snapshot_date"])
+            by_date.setdefault(d, []).append((int(r["snapshot_hour"]), float(r["cumulative_value"])))
+
+        def _nearest(date_str: str, hour: int) -> "float | None":
+            entries = by_date.get(date_str)
+            if not entries:
+                return None
+            candidates = [(h, v) for h, v in entries if h <= hour]
+            if candidates:
+                return max(candidates, key=lambda x: x[0])[1]
+            return min(entries, key=lambda x: abs(x[0] - hour))[1]
+
+        for offset in range(0, 30):
+            ref_date = today - timedelta(days=offset)
+            base_date = ref_date - timedelta(days=7)
+            ref_val = _nearest(ref_date.isoformat(), current_hour)
+            base_val = _nearest(base_date.isoformat(), current_hour)
+            if ref_val is None or base_val is None or base_val == 0:
+                continue
+            anomaly = self._evaluate(
+                metric_id, label, direction, "pace",
+                ref_val, base_val,
+                metric_thresholds["pace"],
+                reference_date=ref_date.isoformat(),
+                display_format=display_format,
+                baseline_date=base_date.isoformat(),
+            )
+            if anomaly:
+                return anomaly
+        return None
 
     def _evaluate(
         self, metric_id: str, label: str, direction: str,
