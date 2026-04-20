@@ -213,6 +213,23 @@ class Detector:
             except Exception as e:
                 logger.error("BQ metric check failed: %s", e)
 
+        # force_pace: if no pace anomaly found at all, scan back and add ONE for the first metric that has one
+        if force_pace and not any(a.comparison == "pace" for a in anomalies):
+            now_date = datetime.now(timezone.utc).date()
+            for m in self._metric_configs:
+                thresholds = {
+                    comp: float(m.get(f"{comp}_threshold", THRESHOLDS[comp]))
+                    for comp in ("pace", "dod", "wow")
+                }
+                fallback = self._scan_for_pace_anomaly(
+                    m["metric_id"], m["metric_label"], m.get("direction", "down_is_bad"),
+                    now_date, datetime.now(timezone.utc).hour,
+                    thresholds, m.get("display_format") or "number",
+                )
+                if fallback:
+                    anomalies.append(fallback)
+                    break
+
         return anomalies, failed_labels
 
     def check_only(self, progress_callback=None) -> tuple[list[Anomaly], list[tuple[str, str]]]:
@@ -710,14 +727,6 @@ class Detector:
             )
             if anomaly:
                 anomalies.append(anomaly)
-
-        # force_pace: if still no pace anomaly, scan back for the most recent one (debug runs only)
-        if force_pace and not any(a.comparison == "pace" for a in anomalies):
-            fallback = self._scan_for_pace_anomaly(
-                metric_id, label, direction, today, current_hour, metric_thresholds, display_format
-            )
-            if fallback:
-                anomalies.append(fallback)
 
         # DoD check: yesterday vs day-before (Steep – alltid korrekt slutvärde)
         yesterday_val = historical.get(yesterday.isoformat())
