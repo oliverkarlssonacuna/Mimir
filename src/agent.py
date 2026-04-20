@@ -600,11 +600,12 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                     _anomaly_line_y_for_pairs = ys[idx]
                     break
         if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            _comparison_pairs.append((_wow_baseline_idx, ys[_wow_baseline_idx], _anomaly_idx_for_pairs, _anomaly_line_y_for_pairs, YELLOW, "WoW"))
+            # Use BQ ground-truth values for pct calculation — Steep line may be 0 for that date
+            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, YELLOW, "WoW"))
         if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            _comparison_pairs.append((_dod_baseline_idx, ys[_dod_baseline_idx], _anomaly_idx_for_pairs, _anomaly_line_y_for_pairs, GREEN, "DoD"))
+            _comparison_pairs.append((_dod_baseline_idx, _dod_baseline_y or ys[_dod_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, GREEN, "DoD"))
         if _wow_baseline_idx is not None and _pace_idx is not None:
-            _comparison_pairs.append((_wow_baseline_idx, ys[_wow_baseline_idx], _pace_idx, ys[_pace_idx], ORANGE, "Pace"))
+            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _pace_idx, _pace_y or ys[_pace_idx], ORANGE, "Pace"))
 
     # ── Draw annotations ───────────────────────────────────────────────
     if _annotations and ys:

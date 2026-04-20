@@ -431,7 +431,7 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
             release_names = ", ".join(r.get("name", "") for r in releases[:2])
             release_note = f" This coincides with release(s): {release_names}."
 
-        analysis = f"{anomalies[0].metric_label}: {change_summary}.{release_note} Investigate further to confirm the cause."
+        analysis = f"{anomalies[0].metric_label}: {change_summary}.{release_note}"
         embed.add_field(name="Analysis", value=analysis, inline=False)
     except Exception as e:
         logger.warning("Analysis summary failed: %s", e)
