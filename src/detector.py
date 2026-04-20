@@ -40,6 +40,7 @@ class Anomaly:
     reference_date: str     # the date the anomaly refers to (YYYY-MM-DD)
     baseline_date: str = ""  # the date of the baseline value (YYYY-MM-DD)
     display_format: str = "number"  # "number" or "percent"
+    reference_hour: int = -1  # UTC hour of the snapshot used (pace only)
 
 
 class Detector:
@@ -724,6 +725,7 @@ class Detector:
                 reference_date=today_str,
                 display_format=display_format,
                 baseline_date=same_weekday_last_week.isoformat(),
+                reference_hour=current_hour,
             )
             if anomaly:
                 anomalies.append(anomaly)
@@ -820,6 +822,7 @@ class Detector:
                 reference_date=ref_date.isoformat(),
                 display_format=display_format,
                 baseline_date=base_date.isoformat(),
+                reference_hour=current_hour,
             )
             if anomaly:
                 return anomaly
@@ -832,6 +835,7 @@ class Detector:
         reference_date: str = "",
         display_format: str = "number",
         baseline_date: str = "",
+        reference_hour: int = -1,
     ) -> Anomaly | None:
         """Compare current vs baseline. Return Anomaly if threshold exceeded."""
         change_pct = (current - baseline) / abs(baseline)
@@ -878,6 +882,7 @@ class Detector:
             reference_date=reference_date,
             baseline_date=baseline_date,
             display_format=display_format,
+            reference_hour=reference_hour,
         )
 
     # ── BQ metric checking ────────────────────────────────────────────────

@@ -373,8 +373,9 @@ def _build_grouped_embed(anomalies: list[Anomaly]) -> discord.Embed:
 
         # Human-readable labels depending on comparison type
         if a.comparison == "pace":
-            cur_label = f"Today so far"
-            base_label = f"Same day last week ({base_short})" if base_short else "Same day last week"
+            hour_str = f" kl {a.reference_hour:02d}:00 UTC" if a.reference_hour >= 0 else ""
+            cur_label = f"Today so far{hour_str}"
+            base_label = f"Same day last week ({base_short}{hour_str})" if base_short else f"Same day last week{hour_str}"
         elif a.comparison == "dod":
             cur_label = f"Yesterday ({_fmt_date_short(a.reference_date)})"
             base_label = f"Day before ({base_short})" if base_short else "Day before"
