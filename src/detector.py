@@ -694,7 +694,8 @@ class Detector:
         anomalies: list[Anomaly] = []
 
         # Pace check: today vs same weekday last week at same hour (BQ snapshots)
-        last_week_same_hour = self._get_nearest_snapshot(metric_id, same_weekday_last_week.isoformat(), current_hour, strict=True)
+        # strict=False: använd närmaste snapshot om exakt timme saknas (t.ex. vid manuell run)
+        last_week_same_hour = self._get_nearest_snapshot(metric_id, same_weekday_last_week.isoformat(), current_hour, strict=False)
         if last_week_same_hour is not None and last_week_same_hour != 0:
             anomaly = self._evaluate(
                 metric_id, label, direction, "pace",
