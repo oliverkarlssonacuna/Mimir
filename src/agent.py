@@ -564,7 +564,16 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _wow_baseline_idx = b_idx
             _wow_baseline_line_y = ys[b_idx]
             _wow_baseline_y = baseline_value if baseline_value is not None else _wow_baseline_line_y
-            _annotations.append((b_idx, _wow_baseline_line_y, _wow_baseline_y, YELLOW, _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)))
+            # Label based on context:
+            # - WoW (or combined WoW+Pace): red anomaly dot exists → use "WoW" with yesterday's value
+            # - Pace-only: no red anomaly dot → use "Pace baseline" with today's pace value
+            if _anomaly_y is not None:
+                _baseline_pill_label = _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)
+            elif _pace_y is not None:
+                _baseline_pill_label = _pct_change_label("Pace baseline", _pace_y, _wow_baseline_y)
+            else:
+                _baseline_pill_label = f"Last week  ·  {_fmt_val(_wow_baseline_y)}"
+            _annotations.append((b_idx, _wow_baseline_line_y, _wow_baseline_y, YELLOW, _baseline_pill_label))
 
     # baseline_date_2 = DoD baseline (day before yesterday) - GREEN
     _dod_baseline_idx = None

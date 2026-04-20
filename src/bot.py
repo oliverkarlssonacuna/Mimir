@@ -496,38 +496,6 @@ async def monitor_loop():
         embed.set_footer(text="Mimir — Error Monitor")
         await error_channel.send(embed=embed)
 
-    if not anomalies:
-        logger.info("Monitor: no anomalies detected.")
-        status_ch = bot.get_channel(int(Config.DISCORD_STATUS_CHANNEL_ID)) if Config.DISCORD_STATUS_CHANNEL_ID else None
-        if status_ch:
-            await status_ch.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
-        return
-
-    today_str = datetime.now().strftime("%Y-%m-%d")
-    new_anomalies = []
-    for a in anomalies:
-        key = (a.metric_id, a.comparison, today_str)
-        if key not in _alerted_keys:
-            _alerted_keys.add(key)
-            bq.log_alert_key("metric", a.metric_id, a.comparison, today_str)
-            new_anomalies.append(a)
-
-    if not new_anomalies:
-        logger.info("Monitor: anomalies exist but already alerted today.")
-        status_ch = bot.get_channel(int(Config.DISCORD_STATUS_CHANNEL_ID)) if Config.DISCORD_STATUS_CHANNEL_ID else None
-        if status_ch:
-            await status_ch.send(f"ℹ️ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
-        return
-
-    grouped = _group_anomalies(new_anomalies)
-    for metric_anomalies in grouped.values():
-        try:
-            await send_grouped_anomaly_alert(channel, metric_anomalies)
-        except discord.DiscordServerError as e:
-            logger.warning("Discord server error sending alert for %s: %s", metric_anomalies[0].metric_label, e)
-        except Exception as e:
-            logger.error("Failed to send alert for %s: %s", metric_anomalies[0].metric_label, e)
-
     # ── Field value monitor checks (once per day at configured hour) ──────
     field_check_hour = int(_get_setting("field_monitor_check_hour", "8"))
     now_utc = datetime.utcnow()
@@ -564,6 +532,38 @@ async def monitor_loop():
             await channel.send(embed=_build_field_alert_embed(fa_with_unseen))
         except Exception as e:
             logger.error("Failed to send field alert for %s: %s", fa.label, e)
+
+    if not anomalies:
+        logger.info("Monitor: no anomalies detected.")
+        status_ch = bot.get_channel(int(Config.DISCORD_STATUS_CHANNEL_ID)) if Config.DISCORD_STATUS_CHANNEL_ID else None
+        if status_ch:
+            await status_ch.send(f"✅ All clear — checked `{checked_count}/{total_metrics}` metrics, no anomalies detected.")
+        return
+
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    new_anomalies = []
+    for a in anomalies:
+        key = (a.metric_id, a.comparison, today_str)
+        if key not in _alerted_keys:
+            _alerted_keys.add(key)
+            bq.log_alert_key("metric", a.metric_id, a.comparison, today_str)
+            new_anomalies.append(a)
+
+    if not new_anomalies:
+        logger.info("Monitor: anomalies exist but already alerted today.")
+        status_ch = bot.get_channel(int(Config.DISCORD_STATUS_CHANNEL_ID)) if Config.DISCORD_STATUS_CHANNEL_ID else None
+        if status_ch:
+            await status_ch.send(f"ℹ️ No new anomalies — checked `{checked_count}/{total_metrics}` metrics, already alerted on all active issues today.")
+        return
+
+    grouped = _group_anomalies(new_anomalies)
+    for metric_anomalies in grouped.values():
+        try:
+            await send_grouped_anomaly_alert(channel, metric_anomalies)
+        except discord.DiscordServerError as e:
+            logger.warning("Discord server error sending alert for %s: %s", metric_anomalies[0].metric_label, e)
+        except Exception as e:
+            logger.error("Failed to send alert for %s: %s", metric_anomalies[0].metric_label, e)
 
 
 MAX_HISTORY_MESSAGES = 10
@@ -911,13 +911,26 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             triggered_comps = {sa.comparison for sa in saved_anomalies}
             yesterday_str = (today_date - _td(days=1)).isoformat()
             # WoW/DoD reference = yesterday (completed day); Pace reference = today
-            chart_anomaly_date = yesterday_str if ("wow" in triggered_comps or "dod" in triggered_comps) else today
+            # For pace-only alerts, don't set anomaly_date — the orange pace dot is sufficient
+            chart_anomaly_date = yesterday_str if ("wow" in triggered_comps or "dod" in triggered_comps) else ""
             chart_pace_date = today if "pace" in triggered_comps else ""
 
             # Only include today's partial data if Pace is triggered (today is the current point)
             # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
             chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
-            days_since_baseline = (chart_end_date - baseline_date_obj).days + 2
+
+            # Chart window sized to the comparison type — enough context to see the pattern,
+            # but not so much that a historical spike (e.g. closed beta in March) crushes the Y-axis.
+            # Rule: 3 full weeks for WoW/Pace (weekly rhythm visible), 2 weeks for DoD-only.
+            if "wow" in triggered_comps or "pace" in triggered_comps:
+                chart_days = 21  # 3 weeks: see 3x the weekly cycle
+            else:
+                chart_days = 14  # DoD-only: 2 weeks of daily trend is plenty
+
+            chart_start_date = chart_end_date - _td(days=chart_days - 1)
+            # Never go before the baseline start date (data before this is unreliable)
+            chart_start_date = max(chart_start_date, baseline_date_obj)
+            days_since_baseline = (chart_end_date - chart_start_date).days + 1
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
             def _fetch_steep():
@@ -1009,7 +1022,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             for sa in saved_anomalies:
                 if sa.comparison in ("wow", "dod") and _chart_anomaly_val is None:
                     _chart_anomaly_val = sa.current_value
-                if sa.comparison == "wow" and _chart_baseline_val is None:
+                if sa.comparison in ("wow", "pace") and _chart_baseline_val is None:
                     _chart_baseline_val = sa.baseline_value
                 if sa.comparison == "dod" and _chart_baseline_val_2 is None:
                     _chart_baseline_val_2 = sa.baseline_value
