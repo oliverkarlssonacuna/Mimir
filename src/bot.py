@@ -373,7 +373,19 @@ def _build_grouped_embed(anomalies: list[Anomaly]) -> discord.Embed:
 
         # Human-readable labels depending on comparison type
         if a.comparison == "pace":
-            hour_str = f" kl {a.reference_hour:02d}:00 UTC" if a.reference_hour >= 0 else ""
+            if a.reference_hour >= 0:
+                from zoneinfo import ZoneInfo
+                from datetime import timezone as _tz
+                _se_zone = ZoneInfo("Europe/Stockholm")
+                try:
+                    _ref = datetime.fromisoformat(a.reference_date)
+                except Exception:
+                    _ref = datetime(2000, 6, 1)
+                _utc_dt = _ref.replace(hour=a.reference_hour, minute=0, second=0, tzinfo=_tz.utc)
+                _se_hour = _utc_dt.astimezone(_se_zone).hour
+                hour_str = f" kl {_se_hour:02d}:00"
+            else:
+                hour_str = ""
             cur_label = f"Today so far{hour_str}"
             base_label = f"Same day last week ({base_short}{hour_str})" if base_short else f"Same day last week{hour_str}"
         elif a.comparison == "dod":
