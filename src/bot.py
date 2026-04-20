@@ -934,21 +934,40 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
             def _fetch_steep():
+                """Fetch chart data from BQ daily values table (fast ~2s).
+                Falls back to Steep API only if BQ has no data for this metric."""
+                try:
+                    rows = bq.fetch_daily_values(
+                        metric_id=metric_id,
+                        from_date=chart_start_date.isoformat(),
+                        to_date=chart_end_date.isoformat(),
+                    )
+                    if rows:
+                        data = [{"date": r["date"], "value": r["value"]} for r in rows]
+                        if metric_id in percent_metric_ids:
+                            data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} for p in data]
+                        logger.info("Chart data for %s: fetched %d rows from BQ daily values.", metric_id, len(data))
+                        return data
+                except Exception as e:
+                    logger.warning("BQ daily values fetch failed for %s, falling back to Steep: %s", metric_id, e)
+
+                # Fallback: Steep API (slow but always available)
                 import time as _time
                 from agent import _query_steep_metric
                 last_exc = None
-                for attempt in range(3):
+                for attempt in range(2):  # max 2 attempts — we already tried BQ
                     try:
                         data = _query_steep_metric(steep, metric_id, days=days_since_baseline)
                         if metric_id in percent_metric_ids:
                             data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} if "value" in p else p for p in data]
+                        logger.info("Chart data for %s: fetched from Steep API (BQ fallback).", metric_id)
                         return data
                     except Exception as e:
                         last_exc = e
                         logger.warning("Steep fetch attempt %d failed: %s", attempt + 1, e)
-                        if attempt < 2:
-                            _time.sleep(2 ** attempt)  # 1s, 2s backoff
-                logger.error("Steep fetch failed after 3 attempts: %s", last_exc)
+                        if attempt < 1:
+                            _time.sleep(2)
+                logger.error("Chart data fetch failed for %s after BQ + Steep attempts: %s", metric_id, last_exc)
                 return []
 
             def _fetch_jira():

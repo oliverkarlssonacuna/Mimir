@@ -54,6 +54,10 @@ class Config:
     BQ_ALERT_LOG_TABLE: str = (
         "lia-project-sandbox-deletable.anomaly_checks_demo.mimir_alert_log"
     )
+    # BQ table for finalized daily values from Steep (populated once per day at 03:00 UTC)
+    BQ_DAILY_VALUES_TABLE: str = (
+        "lia-project-sandbox-deletable.anomaly_checks_demo.steep_daily_values"
+    )
     MAX_QUERY_ROWS: int = 200
 
     # Monitor interval – 4 hours (matches Steep cache TTL)

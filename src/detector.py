@@ -619,6 +619,58 @@ class Detector:
 
     # ── Comparison logic ──────────────────────────────────────────────────
 
+    def finalize_daily_values(self, days: int = 60) -> int:
+        """Fetch finalized daily values from Steep for all enabled metrics and upsert to BQ.
+
+        Only stores dates up to yesterday — today's data is not yet final.
+        Returns total number of rows upserted.
+        Intended to run once per day at ~03:00 UTC when Steep has finalized previous day.
+        """
+        from datetime import timedelta
+        now = datetime.now(timezone.utc)
+        yesterday = (now.date() - timedelta(days=1)).isoformat()
+        from_date = (now.date() - timedelta(days=days)).isoformat()
+
+        metrics = self._metric_configs
+        if not metrics:
+            logger.warning("finalize_daily_values: no metric configs loaded.")
+            return 0
+
+        self.bq.ensure_daily_values_table()
+
+        total_upserted = 0
+        for metric in metrics:
+            metric_id = metric["metric_id"]
+            label = metric["metric_label"]
+            try:
+                resp = self.steep.query_metric(
+                    metric_id=metric_id,
+                    from_date=f"{from_date}T00:00:00Z",
+                    to_date=f"{yesterday}T23:59:59Z",
+                    time_grain="daily",
+                )
+                data = resp.get("data", [])
+                rows = []
+                for point in data:
+                    date_str = (point.get("time") or "")[:10]
+                    value = point.get("metric")
+                    if date_str and value is not None and date_str <= yesterday:
+                        rows.append({
+                            "metric_id": metric_id,
+                            "metric_label": label,
+                            "value_date": date_str,
+                            "final_value": float(value),
+                        })
+                if rows:
+                    upserted = self.bq.upsert_daily_values(rows)
+                    total_upserted += len(rows)
+                    logger.info("finalize_daily_values: %s → %d rows upserted.", label, len(rows))
+            except Exception as e:
+                logger.error("finalize_daily_values failed for %s: %s", label, e)
+
+        logger.info("finalize_daily_values complete: %d total rows upserted.", total_upserted)
+        return total_upserted
+
     def _check_metric(
         self, metric_id: str, label: str, direction: str,
         today_str: str, current_hour: int, current_value: float,

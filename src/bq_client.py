@@ -343,3 +343,106 @@ class BQClient:
             return ""
         except Exception:
             return ""
+
+    # ── Finalized daily values ─────────────────────────────────────────────
+
+    def ensure_daily_values_table(self) -> None:
+        """Create steep_daily_values table if it doesn't exist."""
+        self.client.query(
+            f"""CREATE TABLE IF NOT EXISTS `{Config.BQ_DAILY_VALUES_TABLE}` (
+                metric_id      STRING    NOT NULL,
+                metric_label   STRING    NOT NULL,
+                value_date     DATE      NOT NULL,
+                final_value    FLOAT64   NOT NULL,
+                finalized_at   TIMESTAMP NOT NULL
+            )
+            PARTITION BY value_date
+            OPTIONS (require_partition_filter = false)"""
+        ).result()
+
+    def upsert_daily_values(self, rows: list[dict]) -> int:
+        """Upsert finalized daily values. Each row: {metric_id, metric_label, value_date, final_value}.
+
+        Uses MERGE so re-running the job overwrites with the latest Steep value (handles retroactive corrections).
+        """
+        if not rows:
+            return 0
+        from google.cloud import bigquery as _bq
+        # Build a VALUES list for the MERGE source
+        value_rows = ", ".join(
+            f"('{r['metric_id']}', '{r['metric_label']}', DATE('{r['value_date']}'), {float(r['final_value'])})"
+            for r in rows
+        )
+        sql = f"""
+            MERGE `{Config.BQ_DAILY_VALUES_TABLE}` AS target
+            USING (
+                SELECT metric_id, metric_label, value_date, final_value
+                FROM UNNEST([
+                    STRUCT<metric_id STRING, metric_label STRING, value_date DATE, final_value FLOAT64>
+                    {value_rows}
+                ])
+            ) AS source
+            ON target.metric_id = source.metric_id AND target.value_date = source.value_date
+            WHEN MATCHED THEN
+                UPDATE SET
+                    final_value  = source.final_value,
+                    metric_label = source.metric_label,
+                    finalized_at = CURRENT_TIMESTAMP()
+            WHEN NOT MATCHED THEN
+                INSERT (metric_id, metric_label, value_date, final_value, finalized_at)
+                VALUES (source.metric_id, source.metric_label, source.value_date, source.final_value, CURRENT_TIMESTAMP())
+        """
+        try:
+            return self.run_update(sql)
+        except Exception as e:
+            logger.error("upsert_daily_values failed: %s", e)
+            return 0
+
+    def fetch_daily_values(self, metric_id: str, from_date: str, to_date: str) -> list[dict]:
+        """Fetch finalized daily values for a metric in [from_date, to_date].
+
+        Returns list of {date: str, value: float} sorted by date ascending.
+        Falls back to steep_metric_snapshots MAX(cumulative_value) for dates with no final value.
+        """
+        from google.cloud import bigquery as _bq
+        sql = f"""
+            WITH final AS (
+                SELECT
+                    CAST(value_date AS STRING) AS date,
+                    final_value AS value,
+                    'final' AS source
+                FROM `{Config.BQ_DAILY_VALUES_TABLE}`
+                WHERE metric_id = @metric_id
+                  AND value_date BETWEEN DATE(@from_date) AND DATE(@to_date)
+            ),
+            snapshot_fallback AS (
+                SELECT
+                    CAST(snapshot_date AS STRING) AS date,
+                    MAX(cumulative_value) AS value,
+                    'snapshot' AS source
+                FROM `{Config.BQ_SNAPSHOT_TABLE}`
+                WHERE metric_id = @metric_id
+                  AND snapshot_date BETWEEN DATE(@from_date) AND DATE(@to_date)
+                GROUP BY snapshot_date
+            ),
+            combined AS (
+                SELECT date, value FROM final
+                UNION ALL
+                SELECT s.date, s.value
+                FROM snapshot_fallback s
+                WHERE s.date NOT IN (SELECT date FROM final)
+            )
+            SELECT date, value
+            FROM combined
+            ORDER BY date ASC
+        """
+        params = [
+            _bq.ScalarQueryParameter("metric_id", "STRING", metric_id),
+            _bq.ScalarQueryParameter("from_date",  "STRING", from_date),
+            _bq.ScalarQueryParameter("to_date",    "STRING", to_date),
+        ]
+        try:
+            return self.run_query(sql, params=params, max_rows=400)
+        except Exception as e:
+            logger.error("fetch_daily_values failed for %s: %s", metric_id, e)
+            return []
