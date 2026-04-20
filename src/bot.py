@@ -451,7 +451,13 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
 
     _pending_anomalies[anomalies[0].metric_id] = anomalies
     view = GroupedAnomalyView(anomalies[0].metric_id, anomalies[0].reference_date)
-    await channel.send(embed=embed, view=view)
+    try:
+        await channel.send(embed=embed, view=view)
+    except Exception as e:
+        logger.error("Failed to send anomaly alert for %s: %s", anomalies[0].metric_label, e)
+        err_ch = _get_error_channel()
+        if err_ch and err_ch != channel:
+            await err_ch.send(f"❌ **Failed to send anomaly alert** for `{anomalies[0].metric_label}`: {e}")
 
 
 # ── Monitor loop ──────────────────────────────────────────────────────────────
@@ -545,6 +551,7 @@ async def monitor_loop():
             await channel.send(embed=_build_field_alert_embed(fa_with_unseen))
         except Exception as e:
             logger.error("Failed to send field alert for %s: %s", fa.label, e)
+            await error_channel.send(f"❌ **Failed to send field alert** for `{fa.label}`: {e}")
 
     if not anomalies:
         logger.info("Monitor: no anomalies detected.")
@@ -575,8 +582,10 @@ async def monitor_loop():
             await send_grouped_anomaly_alert(channel, metric_anomalies)
         except discord.DiscordServerError as e:
             logger.warning("Discord server error sending alert for %s: %s", metric_anomalies[0].metric_label, e)
+            await error_channel.send(f"⚠️ **Discord server error** sending alert for `{metric_anomalies[0].metric_label}` — will retry next cycle: {e}")
         except Exception as e:
             logger.error("Failed to send alert for %s: %s", metric_anomalies[0].metric_label, e)
+            await error_channel.send(f"❌ **Failed to send alert** for `{metric_anomalies[0].metric_label}`: {e}")
 
 
 MAX_HISTORY_MESSAGES = 10
@@ -729,6 +738,9 @@ async def _start_internal_server():
             field_alerts = await loop.run_in_executor(None, detector.check_field_monitors)
         except Exception as e:
             logger.error("Manual field monitor check failed: %s", e)
+            err_ch = _get_error_channel()
+            if err_ch:
+                asyncio.create_task(err_ch.send(f"❌ **Manual field monitor check failed**: `{type(e).__name__}: {e}`"))
             return aiohttp_web.Response(
                 text=f'{{"ok": false, "error": "{e}"}}',
                 content_type="application/json",
@@ -759,10 +771,19 @@ async def _start_internal_server():
             )
         except Exception as e:
             logger.error("Manual monitor check failed: %s", e)
+            err_ch = _get_error_channel()
+            if err_ch:
+                asyncio.create_task(err_ch.send(f"❌ **Manual monitor check failed**: `{type(e).__name__}: {e}`\nCheck Cloud Run logs for full traceback."))
             return aiohttp_web.Response(
                 text=f'{{"ok": false, "error": "{e}"}}',
                 content_type="application/json",
             )
+        if failed_labels:
+            err_ch = _get_error_channel()
+            if err_ch:
+                unique_failed = {lbl: err for lbl, err in failed_labels}
+                lines = "\n".join(f"• `{lbl}` — {err}" for lbl, err in unique_failed.items())
+                asyncio.create_task(err_ch.send(f"⚠️ **Manual monitor — {len(unique_failed)} metric(s) failed to fetch:**\n{lines}"))
         if not anomalies or not channel:
             return aiohttp_web.Response(
                 text=f'{{"ok": true, "alerts_sent": 0, "anomalies": 0}}',
@@ -776,6 +797,9 @@ async def _start_internal_server():
                 sent += 1
             except Exception as e:
                 logger.error("Manual monitor: failed to send for %s: %s", metric_anomalies[0].metric_label, e)
+                err_ch = _get_error_channel()
+                if err_ch:
+                    asyncio.create_task(err_ch.send(f"❌ **Manual monitor — failed to send alert** for `{metric_anomalies[0].metric_label}`: {e}"))
         logger.info("Manual monitor check: %d anomaly groups sent.", sent)
         return aiohttp_web.Response(
             text=f'{{"ok": true, "alerts_sent": {sent}, "anomalies": {len(anomalies)}}}',
@@ -801,14 +825,30 @@ async def on_ready():
     logger.info("Synced %d commands: %s", len(synced), [c.name for c in synced])
     logger.info("Bot is ready as %s", bot.user)
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, bq.ensure_notes_table)
-    await loop.run_in_executor(None, bq.ensure_field_monitors_table)
-    await loop.run_in_executor(None, bq.ensure_settings_table)
-    await loop.run_in_executor(None, bq.ensure_alert_log_table)
-    await loop.run_in_executor(None, _load_runtime_settings)
+    _init_errors: list[str] = []
+    for _fn, _label in [
+        (bq.ensure_notes_table, "notes table"),
+        (bq.ensure_field_monitors_table, "field monitors table"),
+        (bq.ensure_settings_table, "settings table"),
+        (bq.ensure_alert_log_table, "alert log table"),
+        (_load_runtime_settings, "runtime settings"),
+    ]:
+        try:
+            await loop.run_in_executor(None, _fn)
+        except Exception as _e:
+            logger.error("on_ready: failed to initialise %s: %s", _label, _e)
+            _init_errors.append(f"• {_label}: `{_e}`")
+    if _init_errors:
+        err_ch = _get_error_channel()
+        if err_ch:
+            await err_ch.send(f"⚠️ **Bot startup — {len(_init_errors)} BQ init step(s) failed:**\n" + "\n".join(_init_errors))
     # Restore today's alerted keys from BQ so restarts don't resend alerts
     today_str = datetime.now().strftime("%Y-%m-%d")
-    rows = await loop.run_in_executor(None, lambda: bq.load_today_alert_keys(today_str))
+    try:
+        rows = await loop.run_in_executor(None, lambda: bq.load_today_alert_keys(today_str))
+    except Exception as _e:
+        logger.error("on_ready: failed to restore alert keys: %s", _e)
+        rows = []
     for alert_type, k1, k2, k3 in rows:
         if alert_type == "metric":
             _alerted_keys.add((k1, k2, k3))
