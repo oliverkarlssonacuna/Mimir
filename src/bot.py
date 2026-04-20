@@ -1100,6 +1100,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "- Use real numbers everywhere. No vague statements.\n"
                 "- Reference specific dates (e.g. 'Mar 30 beta close') not just 'recently'.\n"
                 "- If speculating, use 'likely' or 'possibly' — once, not repeatedly.\n"
+                "- NEVER say 'unknown issue' or 'unclear cause' — always commit to the single most plausible explanation based on milestones, correlated metrics, and data shape.\n"
                 "- Do NOT add a summary or closing sentence. Stop after **📈 Trend**.\n"
                 "- Do NOT say 'investigate further'.\n"
             )

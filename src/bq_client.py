@@ -127,6 +127,9 @@ class BQClient:
               AND baseline_val != 0
               AND {direction_filter}
               AND ABS(SAFE_DIVIDE(anomaly_val - baseline_val, ABS(baseline_val))) >= @min_pct_dec
+              -- Exclude near-zero baselines that produce misleadingly large percentages
+              AND ABS(baseline_val) >= 1.0
+              AND ABS(anomaly_val) >= 1.0
             ORDER BY ABS(SAFE_DIVIDE(anomaly_val - baseline_val, ABS(baseline_val))) DESC
             LIMIT @top_n
         """
