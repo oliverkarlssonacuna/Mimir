@@ -66,6 +66,19 @@ def main():
         logger.error("Snapshot job failed: %s", e)
         sys.exit(1)
 
+    # ── Daily finalization at 03:00 UTC ───────────────────────────────────
+    # Runs automatically when the hourly job ticks during hour 3 UTC.
+    # Steep guarantees previous day's data is finalized by then.
+    from datetime import datetime, timezone
+    if datetime.now(timezone.utc).hour == 3:
+        logger.info("Hour 3 UTC — running daily finalization of Steep values.")
+        try:
+            detector.reload_configs(enabled_only=True)
+            total = detector.finalize_daily_values(days=2)
+            logger.info("Daily finalization complete: %d rows upserted.", total)
+        except Exception as e:
+            logger.error("Daily finalization failed: %s", e)
+
 
 if __name__ == "__main__":
     main()
