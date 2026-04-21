@@ -457,6 +457,12 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         elif chart_type == "line":
             # Main line — smooth, no markers
             ax.plot(x_indices, ys, color=ACCENT, linewidth=2, zorder=4, solid_capstyle="round")
+            # Gradient fill under line
+            import numpy as np
+            from matplotlib.colors import LinearSegmentedColormap
+            # Two-layer fill for depth
+            ax.fill_between(x_indices, ys, alpha=0.15, color=ACCENT_GLOW, zorder=2)
+            ax.fill_between(x_indices, 0, ys, alpha=0.05, color=ACCENT_GLOW, zorder=1)
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -481,8 +487,10 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         sa, sb = _fmt_val(a), _fmt_val(b)
         return f"{sa} → {sb}"
 
-    # ── Collect all annotation points ────────────────────────────────────
-    _annotations = []  # list of (idx, line_y, bq_y, color, pill_text)
+    # ── Collect all annotation points to avoid overlap ────────────────────
+    _annotations = []  # list of (idx, line_y, label_y, color, label_text)
+    # line_y = position on Steep line (dot sits here)
+    # label_y = BQ ground-truth value (shown in label/pill/% calc)
     _anomaly_y = None   # WoW/DoD current value (BQ)
     _pace_y = None      # Pace current value (BQ)
 
@@ -556,6 +564,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _wow_baseline_idx = b_idx
             _wow_baseline_line_y = ys[b_idx]
             _wow_baseline_y = baseline_value if baseline_value is not None else _wow_baseline_line_y
+            # Label based on context:
+            # - WoW (or combined WoW+Pace): red anomaly dot exists → use "WoW" with yesterday's value
+            # - Pace-only: no red anomaly dot → use "Pace baseline" with today's pace value
             if _anomaly_y is not None:
                 _baseline_pill_label = _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)
             elif _pace_y is not None:
@@ -575,138 +586,113 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _dod_baseline_y = baseline_value_2 if baseline_value_2 is not None else _dod_baseline_line_y
             _annotations.append((b_idx, _dod_baseline_line_y, _dod_baseline_y, GREEN, _pct_change_label("DoD", _anomaly_y, _dod_baseline_y)))
 
-    # ── Pick the single best comparison pair for the bracket arrow ────────
-    # Only ONE bracket is drawn — the most informative comparison.
-    # Priority: WoW > DoD > Pace.  Others still appear as pills.
-    _bracket = None  # (from_idx, from_y, to_idx, to_y, color, label)
+    # ── Build comparison pairs for connecting lines ───────────────────────
+    # Uses line_y (Steep position) for visual arrows so they connect to the dots
+    _comparison_pairs = []
     if chart_type == "line" and ys is not None:
         _anomaly_idx_for_pairs = None
+        _anomaly_line_y_for_pairs = None
         if anomaly_date:
             search_xs = all_xs if (group_col and group_col in data[0]) else xs
             for idx, lbl in enumerate(search_xs):
                 if lbl.startswith(anomaly_date):
                     _anomaly_idx_for_pairs = idx
+                    _anomaly_line_y_for_pairs = ys[idx]
                     break
-        # WoW bracket (baseline → anomaly)
         if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            _bracket = (_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx],
-                        _anomaly_idx_for_pairs, _anomaly_y or ys[_anomaly_idx_for_pairs],
-                        YELLOW, "WoW")
-        # DoD bracket — only if no WoW
-        elif _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            _bracket = (_dod_baseline_idx, _dod_baseline_y or ys[_dod_baseline_idx],
-                        _anomaly_idx_for_pairs, _anomaly_y or ys[_anomaly_idx_for_pairs],
-                        GREEN, "DoD")
-        # Pace bracket — only if no WoW/DoD
-        elif _wow_baseline_idx is not None and _pace_idx is not None:
-            _bracket = (_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx],
-                        _pace_idx, _pace_y or ys[_pace_idx],
-                        ORANGE, "Pace")
+            # Use BQ ground-truth values for pct calculation — Steep line may be 0 for that date
+            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, YELLOW, "WoW"))
+        if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
+            _comparison_pairs.append((_dod_baseline_idx, _dod_baseline_y or ys[_dod_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, GREEN, "DoD"))
+        if _wow_baseline_idx is not None and _pace_idx is not None:
+            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _pace_idx, _pace_y or ys[_pace_idx], ORANGE, "Pace"))
 
-    # ── Draw annotations ──────────────────────────────────────────────────
+    # ── Draw annotations ───────────────────────────────────────────────
     if _annotations and ys:
         n_pts = len(xs) if xs else 1
-        y_max_data = max(ys)
-        y_min_data = min(ys)
+        y_max = max(ys) if ys else 1
+        y_min = min(ys) if ys else 0
+        y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
 
-        # Collect all BQ values that need to be visible
-        relevant_ys = [a_y for _, _, a_y, _, _ in _annotations if a_y is not None]
-        all_visible = list(ys) + relevant_ys
-        vis_max = max(all_visible)
-        vis_min = min(all_visible)
+        # Expand y-axis top so bracket labels are never clipped
+        n_brackets = len(_comparison_pairs)
+        if n_brackets:
+            ax.set_ylim(top=y_max + y_range * (0.25 + n_brackets * 0.18))
 
-        # Smart y-axis scaling: zoom into annotation range when outliers dominate.
-        # Triggers when annotations occupy the lower portion of the y-range.
-        ann_max = max(relevant_ys) if relevant_ys else vis_max
-        if relevant_ys and y_max_data > ann_max * 1.5:
-            rel_max = ann_max
-            rel_min = min(v for v in relevant_ys if v is not None)
-            span = max(rel_max - rel_min, rel_max * 0.3, 1e-9)
-            new_top = rel_max + span * 0.8
-            new_bot = max(0, rel_min - span * 0.15)
-            ax.set_ylim(bottom=new_bot, top=new_top)
-            vis_max = new_top
-            vis_min = new_bot
-
-        y_range = max(vis_max - vis_min, abs(vis_max) * 0.01, 1e-9)
-
-        # Reserve headroom for the single bracket (if any)
-        if _bracket:
-            ax.set_ylim(top=vis_max + y_range * 0.25)
-            y_range = max((vis_max + y_range * 0.25) - vis_min, 1e-9)
-
-        # ── Draw the single bracket arrow ─────────────────────────────
-        if _bracket:
-            from_idx, from_y, to_idx, to_y, b_color, b_label = _bracket
+        # ── Connecting lines between comparison pairs ─────────────────
+        for ci, (from_idx, from_y, to_idx, to_y, c_color, c_label) in enumerate(_comparison_pairs):
             pct = ((to_y - from_y) / abs(from_y)) * 100 if from_y != 0 else 0
-            arrow_sym = "▼" if pct < 0 else "▲"
+            arrow_str = "▼" if pct < 0 else "▲"
             mid_x = (from_idx + to_idx) / 2
+            y_level = y_max + y_range * (0.12 + ci * 0.18)
+            # Use arc when points are close (≤3 indices apart) so the arrow is visible
+            span = abs(to_idx - from_idx)
+            rad = 0.4 if span <= 3 else 0.0
+            if rad == 0.0:
+                # Straight bracket: vertical stems + horizontal arrow
+                ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
+                        ls=":", alpha=0.7, zorder=5)
+                ax.plot([to_idx, to_idx], [to_y, y_level], color=c_color, lw=0.8,
+                        ls=":", alpha=0.7, zorder=5)
+                ax.annotate("", xy=(to_idx, y_level), xytext=(from_idx, y_level),
+                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
+                                            mutation_scale=10,
+                                            connectionstyle="arc3,rad=0.0"),
+                            zorder=6)
+                ax.text(mid_x, y_level + y_range * 0.03,
+                        f"{c_label} {arrow_str} {abs(pct):.1f}%",
+                        ha="center", va="bottom", fontsize=7.5, color=c_color,
+                        fontweight="700", zorder=9)
+            else:
+                # Arc arrow directly between dots — label is in the pill row below
+                ax.annotate("", xy=(to_idx, to_y), xytext=(from_idx, from_y),
+                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.5,
+                                            mutation_scale=10,
+                                            connectionstyle=f"arc3,rad={rad}"),
+                            zorder=6)
 
-            # Bracket sits just above the highest annotation point
-            bracket_base = max(from_y, to_y)
-            y_level = bracket_base + y_range * 0.12
-            ax.plot([from_idx, from_idx], [from_y, y_level], color=b_color, lw=0.7,
-                    ls=":", alpha=0.5, zorder=5)
-            ax.plot([to_idx, to_idx], [to_y, y_level], color=b_color, lw=0.7,
-                    ls=":", alpha=0.5, zorder=5)
-            ax.annotate("", xy=(to_idx, y_level), xytext=(from_idx, y_level),
-                        arrowprops=dict(arrowstyle="<->", color=b_color, lw=1.2,
-                                        mutation_scale=10,
-                                        connectionstyle="arc3,rad=0.0"),
-                        zorder=6)
-            ax.text(mid_x, y_level + y_range * 0.02,
-                    f"{b_label} {arrow_sym} {abs(pct):.1f}%",
-                    ha="center", va="bottom", fontsize=8, color=b_color,
-                    fontweight="700", zorder=9)
-
-        # ── Dots with value labels ────────────────────────────────────
+        # ── Dots + small value labels at each point ───────────────────
         seen_xvals = {}
-        for a_idx, a_line_y, a_bq_y, a_color, _text in _annotations:
-            dot_y = a_bq_y if a_bq_y is not None else a_line_y
-
-            # Thin stem from the line to the BQ dot when they differ visually
-            if abs(dot_y - a_line_y) > y_range * 0.02:
-                ax.plot([a_idx, a_idx], [a_line_y, dot_y], color=a_color,
-                        lw=1, ls="-", alpha=0.4, zorder=5)
-
-            # Dot at BQ value
-            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=7, zorder=7,
+        for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
+            ax.plot(a_idx, a_line_y, "o", color=a_color, markersize=8, zorder=7,
                     markeredgecolor=SURFACE, markeredgewidth=1.5)
-
-            # Value label above the dot
+            # Value label near the dot — shows BQ ground-truth value
             rel = a_idx / max(n_pts - 1, 1)
             ha_dot = "right" if rel > 0.85 else ("left" if rel < 0.15 else "center")
-            x_off = -8 if rel > 0.85 else (8 if rel < 0.15 else 0)
-            y_off = 10 + seen_xvals.get(a_idx, 0) * 18
+            x_off  = -8    if rel > 0.85 else (8    if rel < 0.15 else 0)
+            y_off  = 9 + seen_xvals.get(a_idx, 0) * 16
             seen_xvals[a_idx] = seen_xvals.get(a_idx, 0) + 1
             ax.annotate(
-                _fmt_val(a_bq_y),
-                xy=(a_idx, dot_y),
+                _fmt_val(a_label_y),
+                xy=(a_idx, a_line_y),
                 xytext=(x_off, y_off), textcoords="offset points",
-                fontsize=8, color=a_color, ha=ha_dot, va="bottom",
+                fontsize=7.5, color=a_color, ha=ha_dot, va="bottom",
                 fontweight="600", zorder=8,
             )
 
-        # ── Pills: compact row below the chart ───────────────────────
+        # ── Pills below the chart (fig coordinates) ──────────────────
+        # Place pills in a horizontal row under the x-axis so they never
+        # overlap with the connecting bracket lines drawn above the data.
         n_pills = len(_annotations)
-        for i, (_a_idx, _a_line_y, _a_bq_y, a_color, a_text) in enumerate(_annotations):
+        for i, (_a_idx, _a_line_y, _a_label_y, a_color, a_text) in enumerate(_annotations):
             x_pos = (i + 0.5) / n_pills
             fig.text(
                 x_pos, 0.01, a_text,
                 ha="center", va="bottom",
-                fontsize=7.5, color=a_color, fontweight="500",
-                bbox=dict(boxstyle="round,pad=0.4", facecolor=SURFACE,
-                          edgecolor=a_color, alpha=0.95, linewidth=0.6),
+                fontsize=8, color=a_color, fontweight="500",
+                bbox=dict(boxstyle="round,pad=0.45", facecolor=SURFACE,
+                          edgecolor=a_color, alpha=0.95, linewidth=0.7),
                 zorder=8,
             )
 
-    # ── Title ─────────────────────────────────────────────────────────────
+    # ── Title (left-aligned, clean) ───────────────────────────────────────
     ax.set_title(title, fontsize=13, fontweight="700", color=TEXT, loc="left", pad=20)
     ax.set_xlabel("")
 
     fig.tight_layout(pad=2.5)
+    # Extra bottom room for the annotation pills row
     if _annotations:
-        fig.subplots_adjust(bottom=0.12)
+        fig.subplots_adjust(bottom=0.13)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="mimir_chart_")
     fig.savefig(tmp.name, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
