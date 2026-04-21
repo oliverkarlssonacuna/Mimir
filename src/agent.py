@@ -457,8 +457,6 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         elif chart_type == "line":
             # Main line — smooth, no markers
             ax.plot(x_indices, ys, color=ACCENT, linewidth=2, zorder=4, solid_capstyle="round")
-            # Subtle gradient fill — light enough to not dominate the chart
-            ax.fill_between(x_indices, ys, alpha=0.07, color=ACCENT_GLOW, zorder=2)
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -618,13 +616,14 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         vis_min = min(all_visible)
 
         # Smart y-axis scaling: zoom into annotation range when outliers dominate.
-        # Triggers when the data max is >2.5x the max annotation value.
-        if relevant_ys and y_max_data > max(relevant_ys) * 2.5:
-            rel_max = max(relevant_ys)
+        # Triggers when annotations occupy the lower portion of the y-range.
+        ann_max = max(relevant_ys) if relevant_ys else vis_max
+        if relevant_ys and y_max_data > ann_max * 1.5:
+            rel_max = ann_max
             rel_min = min(v for v in relevant_ys if v is not None)
             span = max(rel_max - rel_min, rel_max * 0.3, 1e-9)
-            new_top = rel_max + span * 0.6
-            new_bot = max(0, rel_min - span * 0.3)
+            new_top = rel_max + span * 0.8
+            new_bot = max(0, rel_min - span * 0.15)
             ax.set_ylim(bottom=new_bot, top=new_top)
             vis_max = new_top
             vis_min = new_bot
@@ -633,8 +632,8 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
 
         # Reserve headroom for the single bracket (if any)
         if _bracket:
-            ax.set_ylim(top=vis_max + y_range * 0.35)
-            y_range = max((vis_max + y_range * 0.35) - vis_min, 1e-9)
+            ax.set_ylim(top=vis_max + y_range * 0.25)
+            y_range = max((vis_max + y_range * 0.25) - vis_min, 1e-9)
 
         # ── Draw the single bracket arrow ─────────────────────────────
         if _bracket:
@@ -643,8 +642,9 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             arrow_sym = "▼" if pct < 0 else "▲"
             mid_x = (from_idx + to_idx) / 2
 
-            # Always use a horizontal bracket above the data
-            y_level = vis_max + y_range * 0.08
+            # Bracket sits just above the highest annotation point
+            bracket_base = max(from_y, to_y)
+            y_level = bracket_base + y_range * 0.12
             ax.plot([from_idx, from_idx], [from_y, y_level], color=b_color, lw=0.7,
                     ls=":", alpha=0.5, zorder=5)
             ax.plot([to_idx, to_idx], [to_y, y_level], color=b_color, lw=0.7,
