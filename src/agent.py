@@ -614,6 +614,20 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         y_min = min(ys) if ys else 0
         y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
 
+        # Smart y-axis scaling: if outlier spikes dwarf the annotation values,
+        # zoom the axis to the relevant range so the interesting points are readable.
+        relevant_ys = [a_y for _, _, a_y, _, _ in _annotations if a_y is not None]
+        if relevant_ys and y_max > max(relevant_ys) * 5:
+            rel_max = max(relevant_ys)
+            rel_min = min(relevant_ys)
+            pad = max(rel_max * 0.4, (rel_max - rel_min) * 0.5, 1e-9)
+            new_top = rel_max + pad
+            new_bot = min(0, rel_min - pad * 0.2)
+            ax.set_ylim(bottom=new_bot, top=new_top)
+            y_max = new_top
+            y_min = new_bot
+            y_range = max(new_top - new_bot, 1e-9)
+
         # Expand y-axis top so bracket labels are never clipped
         n_brackets = len(_comparison_pairs)
         if n_brackets:

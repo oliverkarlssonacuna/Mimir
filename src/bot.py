@@ -903,6 +903,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 embed = interaction.message.embeds[0] if interaction.message.embeds else None
                 if embed:
                     embed.set_footer(text=f"\ud83d\udd0d Analysed by {interaction.user.display_name}")
+                    embed.timestamp = datetime.utcnow()
                     await interaction.message.edit(embed=embed, view=disabled_view)
                 else:
                     await interaction.message.edit(view=disabled_view)
