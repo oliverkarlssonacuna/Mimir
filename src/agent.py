@@ -641,7 +641,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             y_level = y_max + y_range * (0.12 + ci * 0.18)
             # Use arc when points are close (≤3 indices apart) so the arrow is visible
             span = abs(to_idx - from_idx)
-            rad = 0.4 if span <= 3 else 0.0
+            rad = -0.4 if span <= 3 else 0.0  # negative = bows upward, avoids dipping below data
             if rad == 0.0:
                 # Straight bracket: vertical stems + horizontal arrow
                 ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
@@ -658,17 +658,28 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                         ha="center", va="bottom", fontsize=7.5, color=c_color,
                         fontweight="700", zorder=9)
             else:
-                # Arc arrow directly between dots — label is in the pill row below
+                # Arc arrow directly between dots + label above the arc midpoint
                 ax.annotate("", xy=(to_idx, to_y), xytext=(from_idx, from_y),
                             arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.5,
                                             mutation_scale=10,
                                             connectionstyle=f"arc3,rad={rad}"),
                             zorder=6)
+                arc_label_y = max(from_y, to_y) + y_range * 0.15
+                ax.text(mid_x, arc_label_y,
+                        f"{c_label} {arrow_str} {abs(pct):.1f}%",
+                        ha="center", va="bottom", fontsize=7.5, color=c_color,
+                        fontweight="700", zorder=9)
 
         # ── Dots + small value labels at each point ───────────────────
+        # Draw subtle vertical column highlight at each annotated date
+        for a_idx, _a_line_y, _a_label_y, a_color, _text in _annotations:
+            ax.axvspan(a_idx - 0.4, a_idx + 0.4, alpha=0.06, color=a_color, zorder=1, linewidth=0)
+
         seen_xvals = {}
         for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
-            ax.plot(a_idx, a_line_y, "o", color=a_color, markersize=8, zorder=7,
+            # Use BQ ground-truth value for dot position — Steep line may be 0 or stale for partial days
+            dot_y = a_label_y if a_label_y is not None else a_line_y
+            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=8, zorder=7,
                     markeredgecolor=SURFACE, markeredgewidth=1.5)
             # Value label near the dot — shows BQ ground-truth value
             rel = a_idx / max(n_pts - 1, 1)
@@ -678,7 +689,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             seen_xvals[a_idx] = seen_xvals.get(a_idx, 0) + 1
             ax.annotate(
                 _fmt_val(a_label_y),
-                xy=(a_idx, a_line_y),
+                xy=(a_idx, dot_y),
                 xytext=(x_off, y_off), textcoords="offset points",
                 fontsize=7.5, color=a_color, ha=ha_dot, va="bottom",
                 fontweight="600", zorder=8,
