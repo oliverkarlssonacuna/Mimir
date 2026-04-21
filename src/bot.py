@@ -973,15 +973,14 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
             chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
 
-            # Chart window sized to the comparison type — enough context to see the pattern,
-            # but not so much that a historical spike (e.g. closed beta in March) crushes the Y-axis.
-            # Rule: 3 full weeks for WoW/Pace (weekly rhythm visible), 2 weeks for DoD-only.
-            if "wow" in triggered_comps or "pace" in triggered_comps:
-                chart_days = 21  # 3 weeks: see 3x the weekly cycle
+            # Chart window: anchor to the earliest key date (WoW/DoD baseline) + 3 days lead-in.
+            # This keeps Y-axis scaled to the relevant comparison period instead of distant history.
+            _key_dates = [d for d in [baseline_date, baseline_date_2, chart_anomaly_date, chart_pace_date] if d]
+            if _key_dates:
+                _earliest_key = datetime.strptime(min(_key_dates), "%Y-%m-%d").date()
+                chart_start_date = _earliest_key - _td(days=3)
             else:
-                chart_days = 14  # DoD-only: 2 weeks of daily trend is plenty
-
-            chart_start_date = chart_end_date - _td(days=chart_days - 1)
+                chart_start_date = chart_end_date - _td(days=13)  # fallback: 2 weeks
             # Never go before the baseline start date (data before this is unreliable)
             chart_start_date = max(chart_start_date, baseline_date_obj)
             days_since_baseline = (chart_end_date - chart_start_date).days + 1
