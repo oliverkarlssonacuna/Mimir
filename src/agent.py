@@ -627,7 +627,7 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             y_level = y_max + y_range * (0.12 + ci * 0.18)
             # Use arc when points are close (≤3 indices apart) so the arrow is visible
             span = abs(to_idx - from_idx)
-            rad = 0.4 if span <= 3 else 0.0
+            rad = -0.4 if span <= 3 else 0.0  # negative = bows upward
             if rad == 0.0:
                 # Straight bracket: vertical stems + horizontal arrow
                 ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
