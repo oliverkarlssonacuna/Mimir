@@ -1085,7 +1085,6 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 correlated_metrics = corr_future.result()
 
             import json as _json
-            steep_json = _json.dumps(steep_data)
 
             # Extract BQ ground-truth dot values from saved_anomalies
             _chart_anomaly_val = None
@@ -1101,6 +1100,25 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     _chart_baseline_val_2 = sa.baseline_value
                 if sa.comparison == "pace":
                     _chart_pace_val = sa.current_value
+
+            # Patch zero values in steep_data with BQ ground-truth for key dates
+            _date_overrides = {}
+            if chart_anomaly_date and _chart_anomaly_val is not None:
+                _date_overrides[chart_anomaly_date] = _chart_anomaly_val
+            if baseline_date and _chart_baseline_val is not None:
+                _date_overrides[baseline_date] = _chart_baseline_val
+            if baseline_date_2 and _chart_baseline_val_2 is not None:
+                _date_overrides[baseline_date_2] = _chart_baseline_val_2
+            if chart_pace_date and _chart_pace_val is not None:
+                _date_overrides[chart_pace_date] = _chart_pace_val
+            steep_data = [
+                {**p, "value": _date_overrides[p["date"]]}
+                if p.get("date") in _date_overrides and p.get("value", 1) == 0
+                else p
+                for p in steep_data
+            ]
+
+            steep_json = _json.dumps(steep_data)
 
             # Pre-render chart in thread executor — savefig blocks event loop if run inline
             from agent import _plot_results
