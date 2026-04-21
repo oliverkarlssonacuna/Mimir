@@ -973,14 +973,17 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
             chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
 
-            # Chart window: anchor to the earliest key date (WoW/DoD baseline) + 3 days lead-in.
-            # This keeps Y-axis scaled to the relevant comparison period instead of distant history.
+            # Chart window: anchor to the earliest key date (WoW/DoD baseline) + 3 days lead-in,
+            # but extend back to show context — capped at 21 days. Y-axis smart-clipping in
+            # _plot_results handles any spike that dwarfs the annotation values.
             _key_dates = [d for d in [baseline_date, baseline_date_2, chart_anomaly_date, chart_pace_date] if d]
             if _key_dates:
                 _earliest_key = datetime.strptime(min(_key_dates), "%Y-%m-%d").date()
-                chart_start_date = _earliest_key - _td(days=3)
+                _anchored_start = _earliest_key - _td(days=3)
+                _wide_start = chart_end_date - _td(days=20)  # up to 21 days for context
+                chart_start_date = min(_anchored_start, _wide_start)
             else:
-                chart_start_date = chart_end_date - _td(days=13)  # fallback: 2 weeks
+                chart_start_date = chart_end_date - _td(days=20)
             # Never go before the baseline start date (data before this is unreliable)
             chart_start_date = max(chart_start_date, baseline_date_obj)
             days_since_baseline = (chart_end_date - chart_start_date).days + 1
