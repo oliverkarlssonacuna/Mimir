@@ -67,6 +67,9 @@ _thread_metrics: dict[int, dict] = {}
 # metric_id → list[Anomaly], for use in deep analysis button
 _pending_anomalies: dict[str, list["Anomaly"]] = {}
 
+# metric_id → display label for analyses currently in progress (for SIGTERM reporting)
+_active_analyses: dict[str, str] = {}
+
 # Thread ID → asyncio.Task for auto-close timer
 _thread_timers: dict[int, asyncio.Task] = {}
 
@@ -859,6 +862,21 @@ async def on_ready():
     if not monitor_loop.is_running():
         monitor_loop.start()
 
+    # SIGTERM handler: Cloud Run sends SIGTERM before killing the container.
+    # Report any in-progress analyses to the error channel so they're not silently lost.
+    import signal as _signal
+    def _on_sigterm(*_):
+        async def _notify():
+            err_ch = _get_error_channel()
+            if err_ch and _active_analyses:
+                labels = ", ".join(f"`{v}`" for v in _active_analyses.values())
+                await err_ch.send(
+                    f"⚠️ **Bot restarting (SIGTERM)** — {len(_active_analyses)} analysis in progress was interrupted: {labels}\n"
+                    f"The analysis did not complete. Please re-trigger if needed."
+                )
+        asyncio.create_task(_notify())
+    _signal.signal(_signal.SIGTERM, _on_sigterm)
+
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
@@ -888,6 +906,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
         if interaction.response.is_done():
             return
         await interaction.response.defer(thinking=True)
+        _active_analyses[metric_id] = metric_info.get("metric_label", metric_id)
 
         # Disable buttons and mark as "analysing" on the original message
         if interaction.message:
@@ -1229,10 +1248,17 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
         except Exception as e:
             logger.error("Analysis thread failed: %s", e)
+            import traceback as _tb
             debug_ch = _get_error_channel()
             if debug_ch:
-                await debug_ch.send(f"❌ Analysis thread failed for `{metric_info.get('metric_label', metric_id)}`: {e}")
+                tb_short = "".join(_tb.format_exception(type(e), e, e.__traceback__))[-1500:]
+                await debug_ch.send(
+                    f"❌ **Analysis failed** for `{metric_info.get('metric_label', metric_id)}`\n"
+                    f"```\n{tb_short}\n```"
+                )
             await interaction.followup.send("Could not create analysis thread — see debug channel for details.", ephemeral=True)
+        finally:
+            _active_analyses.pop(metric_id, None)
 
     elif action == "handled":
         handled_by = interaction.user.display_name
