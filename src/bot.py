@@ -898,8 +898,10 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
     metric_id = parts[1] if len(parts) > 1 else ""
     reference_date = parts[2] if len(parts) > 2 else datetime.now().strftime("%Y-%m-%d")
 
-    # Find metric info
+    # Find metric info — check both Steep metrics and BQ metrics
     metric_info = next((m for m in detector._metric_configs if m["metric_id"] == metric_id), None)
+    if metric_info is None:
+        metric_info = next((m for m in getattr(detector, "_bq_metric_configs", []) if m["metric_id"] == metric_id), None)
 
     if action == "analyse" and metric_info:
         # Guard against double-acknowledge (e.g. user double-clicked)
@@ -1008,9 +1010,26 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             days_since_baseline = (chart_end_date - chart_start_date).days + 1
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
+            _is_bq_metric = bool(metric_info.get("sql_query"))
             def _fetch_steep():
-                """Fetch chart data from BQ daily values table (fast ~2s).
-                Falls back to Steep API only if BQ has no data for this metric."""
+                """Fetch chart data.
+                BQ metrics: re-run their sql_query (already returns date+value rows).
+                Steep metrics: BQ daily_values table, fallback to Steep API."""
+                if _is_bq_metric:
+                    sql_query = metric_info.get("sql_query", "")
+                    try:
+                        rows = bq.run_query(sql_query)
+                        data = [{"date": r["date"] if isinstance(r["date"], str) else str(r["date"]), "value": float(r["value"])} for r in rows if r.get("date") is not None and r.get("value") is not None]
+                        # Filter to chart window
+                        data = [p for p in data if chart_start_date.isoformat() <= p["date"] <= chart_end_date.isoformat()]
+                        if metric_id in percent_metric_ids:
+                            data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} for p in data]
+                        logger.info("Chart data for BQ metric %s: %d rows.", metric_id, len(data))
+                        return data
+                    except Exception as e:
+                        logger.error("BQ metric sql_query failed for chart %s: %s", metric_id, e)
+                        return []
+
                 try:
                     rows = bq.fetch_daily_values(
                         metric_id=metric_id,
