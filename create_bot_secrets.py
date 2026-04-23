@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Creates GCP Secret Manager secrets for the Discord bot."""
+import pathlib
 import subprocess
 import sys
 
 PROJECT = "lia-project-sandbox-deletable"
 
+_ENV_FILE = pathlib.Path(__file__).parent / ".env"
+
 # Read .env
 env = {}
-with open("/home/oliver/Mimir/.env") as f:
+with open(_ENV_FILE) as f:
     for line in f:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:

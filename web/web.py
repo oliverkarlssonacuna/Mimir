@@ -558,6 +558,7 @@ async def toggle_metric_collect(metric_id: str, request: Request):
 
     return {"ok": True}
 
+@app.post("/api/metrics/bulk-update-threshold")
 async def bulk_update_threshold(request: Request):
 
     user = _user(request)
@@ -1410,6 +1411,9 @@ async def discover_field_monitors(request: Request):
         tbl_full = entry.get("bq_table", "")
         tbl_label = entry.get("label", tbl_full)
         date_field = entry.get("date_field", "partition_date")
+        if not tbl_full or "`" in tbl_full or ";" in tbl_full or len(tbl_full) > 300:
+            errors.append(f"Skipped {tbl_full}: invalid table format")
+            continue
         parts = tbl_full.split(".")
         if len(parts) != 3:
             errors.append(f"Skipped {tbl_full}: invalid format")
@@ -1643,6 +1647,16 @@ async def upsert_setting(key: str, request: Request):
     value = body.get("value", "")
     if not isinstance(value, str):
         raise HTTPException(status_code=400, detail="value must be a string")
+    import re
+    if key == "baseline_start_date":
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise HTTPException(status_code=400, detail="baseline_start_date must be YYYY-MM-DD")
+    elif key == "field_monitor_check_hour":
+        if not value.isdigit() or not (0 <= int(value) <= 23):
+            raise HTTPException(status_code=400, detail="field_monitor_check_hour must be 0-23")
+    elif key == "game_milestones":
+        if len(value) > 10000:
+            raise HTTPException(status_code=400, detail="game_milestones too long (max 10000 chars)")
     bq.upsert_setting(key, value)
     logger.info("[admin] %s updated setting %s", user["email"], key)
     await _signal_bot_reload()
