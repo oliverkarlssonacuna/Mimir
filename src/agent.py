@@ -920,3 +920,21 @@ class Agent:
             text="Reached maximum iterations without a final answer.",
             chart_path=chart_path,
         )
+
+    def ask_stream(self, question: str, system_prompt: str | None = None):
+        """Stream a no-tools Gemini response, yielding text chunks as they arrive."""
+        active_system_prompt = system_prompt or SYSTEM_PROMPT
+        contents: list[types.Content] = [
+            types.Content(role="user", parts=[types.Part(text=question)])
+        ]
+        for chunk in self.client.models.generate_content_stream(
+            model=self.model,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=active_system_prompt,
+                temperature=0,
+                max_output_tokens=2048,
+            ),
+        ):
+            if chunk.text:
+                yield chunk.text

@@ -1217,31 +1217,68 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "- Do NOT say 'investigate further'.\n"
             )
 
-            loop = asyncio.get_running_loop()
-            from concurrent.futures import ThreadPoolExecutor as _TPE2
-            with _TPE2(max_workers=1) as gemini_exec:
-                response = await loop.run_in_executor(gemini_exec, lambda: agent.ask(prompt, tools_enabled=False))
+            import threading as _threading
 
-            text = response.text or "Here is the analysis:"
-            # Use pre-rendered chart, fall back to agent chart if pre-render failed
-            final_chart = pre_chart or response.chart_path
-            if final_chart:
-                chunks = split_message(text)
-                await thread.send(
-                    content=chunks[0],
-                    file=discord.File(final_chart, filename="chart.png"),
-                )
-                for chunk in chunks[1:]:
-                    await thread.send(content=chunk)
-                for p in (pre_chart, response.chart_path):
-                    if p:
-                        try:
-                            os.remove(p)
-                        except OSError:
-                            pass
-            else:
-                for chunk in split_message(response.text):
-                    await thread.send(content=chunk)
+            loop = asyncio.get_running_loop()
+
+            # Send chart immediately — it's already rendered and ready
+            if pre_chart:
+                try:
+                    await thread.send(file=discord.File(pre_chart, filename="chart.png"))
+                except Exception as e:
+                    logger.warning("Could not send pre-rendered chart: %s", e)
+                finally:
+                    try:
+                        os.remove(pre_chart)
+                    except OSError:
+                        pass
+
+            # Send streaming placeholder that we'll edit as tokens arrive
+            stream_msg = await thread.send("🔍 Analysing…")
+
+            # Run Gemini streaming in a thread, feed chunks via asyncio queue
+            text_queue: asyncio.Queue = asyncio.Queue()
+
+            def _run_stream():
+                try:
+                    for chunk in agent.ask_stream(prompt):
+                        loop.call_soon_threadsafe(text_queue.put_nowait, chunk)
+                except Exception as exc:
+                    loop.call_soon_threadsafe(text_queue.put_nowait, exc)
+                loop.call_soon_threadsafe(text_queue.put_nowait, None)  # sentinel
+
+            _threading.Thread(target=_run_stream, daemon=True).start()
+
+            accumulated = ""
+            last_edit = loop.time()
+            EDIT_INTERVAL = 3.0  # seconds between Discord edits (rate limit safety)
+
+            while True:
+                item = await text_queue.get()
+                if item is None:
+                    break
+                if isinstance(item, Exception):
+                    raise item
+                accumulated += item
+                now = loop.time()
+                if now - last_edit >= EDIT_INTERVAL and len(accumulated) > 50:
+                    try:
+                        preview = accumulated[:1990] + ("…" if len(accumulated) > 1990 else "")
+                        await stream_msg.edit(content=preview)
+                        last_edit = now
+                    except discord.HTTPException:
+                        pass
+
+            text = accumulated or "Here is the analysis:"
+
+            # Final edit with complete text (handles potential last chunk not yet edited)
+            final_chunks = split_message(text)
+            try:
+                await stream_msg.edit(content=final_chunks[0])
+            except discord.HTTPException:
+                pass
+            for chunk in final_chunks[1:]:
+                await thread.send(content=chunk)
 
             if steep_url:
                 await thread.send(f"🔗 [View metric in Steep]({steep_url})")
