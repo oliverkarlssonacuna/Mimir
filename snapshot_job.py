@@ -66,12 +66,14 @@ def main():
         logger.error("Snapshot job failed: %s", e)
         sys.exit(1)
 
-    # ── Daily finalization at 03:00 UTC ───────────────────────────────────
-    # Runs automatically when the hourly job ticks during hour 3 UTC.
-    # Steep guarantees previous day's data is finalized by then.
+    # ── Daily finalization at 03:00–05:00 UTC ────────────────────────────
+    # Runs on hours 3, 4 and 5 UTC to ensure Steep has finalized the previous
+    # day's data before we store it. Running all three hours is harmless since
+    # upsert is idempotent — later runs simply overwrite with the same or more
+    # accurate values.
     from datetime import datetime, timezone
-    if datetime.now(timezone.utc).hour == 3:
-        logger.info("Hour 3 UTC — running daily finalization of Steep values.")
+    if datetime.now(timezone.utc).hour in (3, 4, 5):
+        logger.info("Hour %d UTC — running daily finalization of Steep values.", datetime.now(timezone.utc).hour)
         try:
             detector.reload_configs(enabled_only=True)
             total = detector.finalize_daily_values(days=2)
