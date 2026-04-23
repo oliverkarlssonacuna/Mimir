@@ -919,3 +919,4 @@ class Agent:
         ):
             if chunk.text:
                 yield chunk.text
+
