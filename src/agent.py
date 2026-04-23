@@ -611,90 +611,112 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     if _annotations and ys:
         n_pts = len(xs) if xs else 1
         _y_max_data = max(ys) if ys else 1
-        y_min = min(ys) if ys else 0
+        y_min_data = min(ys) if ys else 0
 
-        y_max = _y_max_data
+        # Collect ground-truth key values
+        key_vals = [a_label_y for _, _, a_label_y, _, _ in _annotations if a_label_y is not None]
+        _ann_line_vals = [a_line_y for _, a_line_y, _, _, _ in _annotations]
+        _ann_line_max = max(_ann_line_vals) if _ann_line_vals else 0
+
+        # Y-axis: smart range that focuses on comparison values but still shows
+        # full line data. If a historical spike is >4x the annotation line max,
+        # clip the top so the dots + labels remain readable.
+        y_min = min(0, y_min_data) if y_min_data >= 0 else y_min_data
+        _spike_clipped = False
+        if _ann_line_max > 0 and _y_max_data > _ann_line_max * 4:
+            y_max = _ann_line_max * 2.2
+            _spike_clipped = True
+        else:
+            y_max = _y_max_data
+
         y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
+        # Headroom above for dot labels; tiny bottom padding
+        ax.set_ylim(bottom=y_min - y_range * 0.02, top=y_max + y_range * 0.22)
 
-        # Expand y-axis top so bracket labels are never clipped
-        n_brackets = len(_comparison_pairs)
-        if n_brackets:
-            ax.set_ylim(top=y_max + y_range * (0.25 + n_brackets * 0.18))
+        # ── Focus band: subtle shaded region between baseline and anomaly ─
+        focus_idxs = []
+        if _wow_baseline_idx is not None:
+            focus_idxs.append(_wow_baseline_idx)
+        if _dod_baseline_idx is not None:
+            focus_idxs.append(_dod_baseline_idx)
+        if _anomaly_idx_for_pairs is not None:
+            focus_idxs.append(_anomaly_idx_for_pairs)
+        if _pace_idx is not None:
+            focus_idxs.append(_pace_idx)
 
-        # ── Connecting lines between comparison pairs ─────────────────
-        for ci, (from_idx, from_y, to_idx, to_y, c_color, c_label) in enumerate(_comparison_pairs):
-            pct = ((to_y - from_y) / abs(from_y)) * 100 if from_y != 0 else 0
-            arrow_str = "▼" if pct < 0 else "▲"
-            mid_x = (from_idx + to_idx) / 2
-            y_level = y_max + y_range * (0.12 + ci * 0.18)
-            # Use arc when points are close (≤3 indices apart) so the arrow is visible
-            span = abs(to_idx - from_idx)
-            rad = -0.4 if span <= 3 else 0.0  # negative = bows upward
-            if rad == 0.0:
-                # Straight bracket: vertical stems + horizontal arrow
-                ax.plot([from_idx, from_idx], [from_y, y_level], color=c_color, lw=0.8,
-                        ls=":", alpha=0.7, zorder=5)
-                ax.plot([to_idx, to_idx], [to_y, y_level], color=c_color, lw=0.8,
-                        ls=":", alpha=0.7, zorder=5)
-                ax.annotate("", xy=(to_idx, y_level), xytext=(from_idx, y_level),
-                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.2,
-                                            mutation_scale=10,
-                                            connectionstyle="arc3,rad=0.0"),
-                            zorder=6)
-                ax.text(mid_x, y_level + y_range * 0.03,
-                        f"{c_label} {arrow_str} {abs(pct):.1f}%",
-                        ha="center", va="bottom", fontsize=7.5, color=c_color,
-                        fontweight="700", zorder=9)
-            else:
-                # Arc arrow directly between dots — label is in the pill row below
-                ax.annotate("", xy=(to_idx, to_y), xytext=(from_idx, from_y),
-                            arrowprops=dict(arrowstyle="<->", color=c_color, lw=1.5,
-                                            mutation_scale=10,
-                                            connectionstyle=f"arc3,rad={rad}"),
-                            zorder=6)
+        if len(focus_idxs) >= 2:
+            ax.axvspan(min(focus_idxs) - 0.35, max(focus_idxs) + 0.35,
+                       color="#ffffff", alpha=0.035, zorder=0.5)
 
-        # ── Dots + small value labels at each point ───────────────────
-        seen_xvals = {}
+        # ── Spike indicator if Y was clipped ─────────────────────────────
+        if _spike_clipped:
+            ax.text(0.01, 0.97, f"↑ peak  {_fmt_val(_y_max_data)}",
+                    transform=ax.transAxes, color=TEXT_DIM,
+                    fontsize=8, va="top", ha="left", zorder=10,
+                    bbox=dict(boxstyle="round,pad=0.25", facecolor=SURFACE,
+                              edgecolor=BORDER, alpha=0.7, linewidth=0.5))
+
+        # ── Dots with drop-lines and value labels ────────────────────────
+        seen_positions: list[int] = []
         for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
-            ax.plot(a_idx, a_line_y, "o", color=a_color, markersize=8, zorder=7,
-                    markeredgecolor=SURFACE, markeredgewidth=1.5)
-            # Value label near the dot — shows BQ ground-truth value
+            dot_y = a_label_y if a_label_y is not None else a_line_y
+            # Thin dotted vertical drop-line to x-axis
+            ax.plot([a_idx, a_idx], [y_min, dot_y],
+                    color=a_color, lw=0.8, ls=":", alpha=0.4, zorder=2)
+            # Dot with white-ish halo for punch
+            ax.plot(a_idx, dot_y, "o", color=SURFACE, markersize=14, zorder=6)
+            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=8.5, zorder=7,
+                    markeredgecolor="#ffffff", markeredgewidth=1.3)
+
+            # Value label above/beside dot
             rel = a_idx / max(n_pts - 1, 1)
-            ha_dot = "right" if rel > 0.85 else ("left" if rel < 0.15 else "center")
-            x_off  = -8    if rel > 0.85 else (8    if rel < 0.15 else 0)
-            y_off  = 9 + seen_xvals.get(a_idx, 0) * 16
-            seen_xvals[a_idx] = seen_xvals.get(a_idx, 0) + 1
+            ha_dot = "right" if rel > 0.88 else ("left" if rel < 0.12 else "center")
+            x_off = -10 if rel > 0.88 else (10 if rel < 0.12 else 0)
+            nearby = sum(1 for sx in seen_positions if abs(sx - a_idx) <= 2)
+            y_off = 13 + nearby * 15
+            seen_positions.append(a_idx)
             ax.annotate(
                 _fmt_val(a_label_y),
-                xy=(a_idx, a_line_y),
+                xy=(a_idx, dot_y),
                 xytext=(x_off, y_off), textcoords="offset points",
-                fontsize=7.5, color=a_color, ha=ha_dot, va="bottom",
-                fontweight="600", zorder=8,
+                fontsize=9, color=a_color, ha=ha_dot, va="bottom",
+                fontweight="700", zorder=8,
             )
 
-        # ── Pills below the chart (fig coordinates) ──────────────────
-        # Place pills in a horizontal row under the x-axis so they never
-        # overlap with the connecting bracket lines drawn above the data.
-        n_pills = len(_annotations)
-        for i, (_a_idx, _a_line_y, _a_label_y, a_color, a_text) in enumerate(_annotations):
-            x_pos = (i + 0.5) / n_pills
-            fig.text(
-                x_pos, 0.01, a_text,
-                ha="center", va="bottom",
-                fontsize=8, color=a_color, fontweight="500",
-                bbox=dict(boxstyle="round,pad=0.45", facecolor=SURFACE,
-                          edgecolor=a_color, alpha=0.95, linewidth=0.7),
-                zorder=8,
+        # ── Delta badges row (top-right of chart, inside axes) ───────────
+        badges = []  # (label, pct_str, arrow, color)
+        if _wow_baseline_y is not None and _anomaly_y is not None and _wow_baseline_y != 0:
+            pct = ((_anomaly_y - _wow_baseline_y) / abs(_wow_baseline_y)) * 100
+            badges.append(("WoW", pct, YELLOW))
+        if _dod_baseline_y is not None and _anomaly_y is not None and _dod_baseline_y != 0:
+            pct = ((_anomaly_y - _dod_baseline_y) / abs(_dod_baseline_y)) * 100
+            badges.append(("DoD", pct, GREEN))
+        if _wow_baseline_y is not None and _pace_y is not None and _wow_baseline_y != 0:
+            pct = ((_pace_y - _wow_baseline_y) / abs(_wow_baseline_y)) * 100
+            badges.append(("Pace", pct, ORANGE))
+
+        # Render badges right-to-left at top-right of axes
+        for i, (label, pct, b_color) in enumerate(badges):
+            arrow = "▼" if pct < 0 else "▲"
+            text = f"{label}  {arrow} {abs(pct):.1f}%"
+            # Stack vertically: newest at top
+            x_pos = 0.99
+            y_pos = 0.96 - i * 0.075
+            ax.text(
+                x_pos, y_pos, text,
+                transform=ax.transAxes,
+                ha="right", va="top",
+                fontsize=9.5, color=b_color, fontweight="700",
+                bbox=dict(boxstyle="round,pad=0.5", facecolor=SURFACE,
+                          edgecolor=b_color, alpha=0.95, linewidth=1.0),
+                zorder=9,
             )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
-    ax.set_title(title, fontsize=13, fontweight="700", color=TEXT, loc="left", pad=20)
+    ax.set_title(title, fontsize=14, fontweight="700", color=TEXT, loc="left", pad=14)
     ax.set_xlabel("")
 
-    fig.tight_layout(pad=2.5)
-    # Extra bottom room for the annotation pills row
-    if _annotations:
-        fig.subplots_adjust(bottom=0.13)
+    fig.tight_layout(pad=2.0)
 
     tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False, prefix="mimir_chart_")
     fig.savefig(tmp.name, dpi=120, facecolor=fig.get_facecolor(), bbox_inches="tight")
