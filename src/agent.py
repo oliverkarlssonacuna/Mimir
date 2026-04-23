@@ -455,10 +455,17 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _thin_ticks(ax, xs)
 
         elif chart_type == "line":
-            # Main line — smooth, refined width
-            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.2, zorder=4, solid_capstyle="round", solid_joinstyle="round")
-            # Single soft area fill below the line
-            ax.fill_between(x_indices, ys, alpha=0.12, color=ACCENT_GLOW, zorder=2, linewidth=0)
+            # Smooth main line
+            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.4, zorder=4,
+                    solid_capstyle="round", solid_joinstyle="round")
+            # Layered area fill for soft gradient feel (3 stacked alphas)
+            from matplotlib.colors import to_rgb
+            r, g, b = to_rgb(ACCENT_GLOW)
+            ax.fill_between(x_indices, ys, alpha=0.18, color=ACCENT_GLOW,
+                            zorder=2, linewidth=0)
+            # Lower softer layer extending further down
+            ax.fill_between(x_indices, ys, alpha=0.06, color=ACCENT_GLOW,
+                            zorder=1.5, linewidth=0)
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -607,115 +614,70 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
     if _annotations and ys:
         n_pts = len(xs) if xs else 1
 
-        # Dot Y-position uses line value; label uses BQ ground-truth.
-        # If line is 0/missing on that date, fall back to ground-truth value.
         def _resolve_dot_y(line_y, label_y):
             if line_y is None or line_y == 0:
                 return label_y if label_y is not None else 0
             return line_y
 
-        # Compute Y range based on what's actually shown (dots + line)
-        dot_ys_used = [_resolve_dot_y(ly, gy) for _, ly, gy, _, _ in _annotations]
-        all_y_candidates = list(ys) + dot_ys_used + [v for v in [_wow_baseline_y, _dod_baseline_y] if v is not None]
-        _y_max_data = max(all_y_candidates) if all_y_candidates else 1
-        y_min_data = min(all_y_candidates) if all_y_candidates else 0
+        # Y-axis focused on what matters: dots + baselines, with breathing room.
+        # The line itself can extend above this — we clip to keep dots prominent.
+        focus_vals = [_resolve_dot_y(ly, gy) for _, ly, gy, _, _ in _annotations]
+        focus_vals += [v for v in [_wow_baseline_y, _dod_baseline_y] if v is not None]
+        focus_max = max(focus_vals) if focus_vals else 1
+        focus_min = min(focus_vals) if focus_vals else 0
+        line_max = max(ys) if ys else focus_max
 
-        # Clip y-axis when an old historical spike dwarfs the comparison region.
-        # Threshold 2.5x = leave moderate spikes visible, clip extreme outliers only.
-        ann_focus_max = max([v for v in dot_ys_used + [_wow_baseline_y, _dod_baseline_y] if v is not None] or [_y_max_data])
-        _spike_clipped = False
-        if ann_focus_max > 0 and _y_max_data > ann_focus_max * 2.5:
-            y_max = ann_focus_max * 1.7
+        # Clip the y-axis to focus region when line max far exceeds it (3x).
+        # Otherwise show all data so the trend is visible.
+        if focus_max > 0 and line_max > focus_max * 3:
+            y_max = focus_max * 1.5
             _spike_clipped = True
         else:
-            y_max = _y_max_data
+            y_max = line_max
+            _spike_clipped = False
 
-        y_min = min(0, y_min_data) if y_min_data >= 0 else y_min_data
+        y_min = min(0, focus_min) if focus_min >= 0 else focus_min
         y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
-        # Headroom for top badges + dot value labels
-        ax.set_ylim(bottom=y_min - y_range * 0.04, top=y_max + y_range * 0.28)
+        ax.set_ylim(bottom=y_min - y_range * 0.05, top=y_max + y_range * 0.22)
 
-        # ── Horizontal reference lines at baseline values ─────────────────
-        # Detect collision: if WoW and DoD baselines are within 8% of y-range,
-        # offset DoD label to mid-chart to avoid overlap.
-        _baselines_close = (
-            _wow_baseline_y is not None and _dod_baseline_y is not None
-            and abs(_wow_baseline_y - _dod_baseline_y) < y_range * 0.08
-        )
-
-        if _wow_baseline_y is not None:
-            ax.axhline(y=_wow_baseline_y, color=YELLOW, lw=1.0, ls=(0, (4, 3)),
-                       alpha=0.55, zorder=2.5)
-            ax.text(0.005, _wow_baseline_y, f" Last week  {_fmt_val(_wow_baseline_y)} ",
-                    transform=ax.get_yaxis_transform(),
-                    color=YELLOW, fontsize=8.5, va="center", ha="left",
-                    fontweight="600", zorder=3,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor=BG,
-                              edgecolor=YELLOW, alpha=0.95, linewidth=0.8))
-
-        if _dod_baseline_y is not None and _dod_baseline_y != _wow_baseline_y:
-            ax.axhline(y=_dod_baseline_y, color=GREEN, lw=1.0, ls=(0, (4, 3)),
-                       alpha=0.55, zorder=2.5)
-            # If close to WoW label, shift to mid-chart in axes coords
-            dod_x = 0.45 if _baselines_close else 0.005
-            dod_ha = "center" if _baselines_close else "left"
-            ax.text(dod_x, _dod_baseline_y, f" Day before  {_fmt_val(_dod_baseline_y)} ",
-                    transform=ax.get_yaxis_transform(),
-                    color=GREEN, fontsize=8.5, va="center", ha=dod_ha,
-                    fontweight="600", zorder=3,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor=BG,
-                              edgecolor=GREEN, alpha=0.95, linewidth=0.8))
-
-        # ── Spike indicator if Y was clipped ─────────────────────────────
+        # Spike indicator if Y was clipped — bottom-left, subtle
         if _spike_clipped:
-            ax.text(0.01, 0.04, f"↑ peak  {_fmt_val(_y_max_data)}",
+            ax.text(0.005, 0.04, f"↑ peak {_fmt_val(line_max)}",
                     transform=ax.transAxes, color=TEXT_DIM,
-                    fontsize=8, va="bottom", ha="left", zorder=10,
-                    bbox=dict(boxstyle="round,pad=0.3", facecolor=SURFACE,
-                              edgecolor=BORDER, alpha=0.85, linewidth=0.5))
+                    fontsize=8.5, va="bottom", ha="left", zorder=10,
+                    fontweight="500")
 
-        # ── Dots + value labels ──────────────────────────────────────────
+        # ── Dots at key dates with soft glow halo ───────────────────
         for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
             dot_y = _resolve_dot_y(a_line_y, a_label_y)
+            # Soft glow (large transparent halo)
+            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=22,
+                    zorder=5, alpha=0.18)
+            # Background halo (cuts the line for clean dot edge)
+            ax.plot(a_idx, dot_y, "o", color=BG, markersize=13, zorder=6)
+            # Filled coloured dot with white edge
+            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=8,
+                    zorder=7, markeredgecolor="#ffffff", markeredgewidth=1.4)
 
-            # Outer halo (background colour) makes dot pop on coloured line
-            ax.plot(a_idx, dot_y, "o", color=BG, markersize=15, zorder=6)
-            # Coloured fill with white edge
-            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=9, zorder=7,
-                    markeredgecolor="#ffffff", markeredgewidth=1.4)
-
-            # Value label above dot — coloured text, no box (cleaner)
-            rel = a_idx / max(n_pts - 1, 1)
-            ha_dot = "right" if rel > 0.92 else ("left" if rel < 0.08 else "center")
-            x_off = -10 if rel > 0.92 else (10 if rel < 0.08 else 0)
-            ax.annotate(
-                _fmt_val(a_label_y),
-                xy=(a_idx, dot_y),
-                xytext=(x_off, 12), textcoords="offset points",
-                fontsize=10.5, color=a_color, ha=ha_dot, va="bottom",
-                fontweight="700", zorder=8,
-                path_effects=[pe.withStroke(linewidth=3, foreground=BG)],
-            )
-
-        # ── Delta badges (top-right of chart) ────────────────────────────
-        badges = []  # (label, pct, color)
+        # ── Summary badges (top-right) — single source of truth ──────────
+        summary = []  # (label, arrow, pct, base, current, color)
         if _wow_baseline_y is not None and _anomaly_y is not None and _wow_baseline_y != 0:
             pct = ((_anomaly_y - _wow_baseline_y) / abs(_wow_baseline_y)) * 100
-            badges.append(("WoW", pct, YELLOW))
+            summary.append(("WoW", "▼" if pct < 0 else "▲", abs(pct),
+                            _wow_baseline_y, _anomaly_y, YELLOW))
         if _dod_baseline_y is not None and _anomaly_y is not None and _dod_baseline_y != 0:
             pct = ((_anomaly_y - _dod_baseline_y) / abs(_dod_baseline_y)) * 100
-            badges.append(("DoD", pct, GREEN))
+            summary.append(("DoD", "▼" if pct < 0 else "▲", abs(pct),
+                            _dod_baseline_y, _anomaly_y, GREEN))
         if _wow_baseline_y is not None and _pace_y is not None and _wow_baseline_y != 0:
             pct = ((_pace_y - _wow_baseline_y) / abs(_wow_baseline_y)) * 100
-            badges.append(("Pace", pct, ORANGE))
+            summary.append(("Pace", "▼" if pct < 0 else "▲", abs(pct),
+                            _wow_baseline_y, _pace_y, ORANGE))
 
-        for i, (label, pct, b_color) in enumerate(badges):
-            arrow = "▼" if pct < 0 else "▲"
-            text = f"{label}  {arrow} {abs(pct):.1f}%"
-            x_pos = 0.99
-            y_pos = 0.97 - i * 0.085
+        for i, (lbl, arrow, pct, base_v, cur_v, b_color) in enumerate(summary):
+            text = f"{lbl}  {arrow} {pct:.1f}%   {_fmt_val(base_v)} → {_fmt_val(cur_v)}"
             ax.text(
-                x_pos, y_pos, text,
+                0.99, 0.97 - i * 0.085, text,
                 transform=ax.transAxes,
                 ha="right", va="top",
                 fontsize=10, color=b_color, fontweight="700",
