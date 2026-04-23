@@ -994,14 +994,8 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
             chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
 
-            # Chart window: start 3 days before the earliest key date (WoW/DoD baseline)
-            # so the comparison dots have context without including unrelated history.
-            _key_dates = [d for d in [baseline_date, baseline_date_2, chart_anomaly_date, chart_pace_date] if d]
-            if _key_dates:
-                _earliest_key = datetime.strptime(min(_key_dates), "%Y-%m-%d").date()
-                chart_start_date = _earliest_key - _td(days=3)
-            else:
-                chart_start_date = chart_end_date - _td(days=14)
+            # Chart window: from the configured baseline start date in admin UI
+            chart_start_date = baseline_date_obj
             # Never go before the baseline start date (data before this is unreliable)
             chart_start_date = max(chart_start_date, baseline_date_obj)
             days_since_baseline = (chart_end_date - chart_start_date).days + 1

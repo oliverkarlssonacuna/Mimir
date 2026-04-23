@@ -613,28 +613,13 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
         _y_max_data = max(ys) if ys else 1
         y_min = min(ys) if ys else 0
 
-        # Smart Y-axis: if a historical spike dwarfs the annotation points, clip the
-        # ceiling so dots + brackets are readable. Show peak value as a subtle label.
-        _ann_line_vals = [a_line_y for _, a_line_y, _, _, _ in _annotations]
-        _ann_line_max = max(_ann_line_vals) if _ann_line_vals else 0
-        _spike_clipped = False
-        if _ann_line_max > 0 and _y_max_data > _ann_line_max * 5:
-            y_max = _ann_line_max * 3
-            _spike_clipped = True
-        else:
-            y_max = _y_max_data
-
+        y_max = _y_max_data
         y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
 
         # Expand y-axis top so bracket labels are never clipped
         n_brackets = len(_comparison_pairs)
         if n_brackets:
             ax.set_ylim(top=y_max + y_range * (0.25 + n_brackets * 0.18))
-
-        if _spike_clipped:
-            ax.text(0.01, 0.97, f"↑ peak  {_fmt_val(_y_max_data)}",
-                    transform=ax.transAxes, color="#6b7280",
-                    fontsize=8, va="top", ha="left", zorder=10)
 
         # ── Connecting lines between comparison pairs ─────────────────
         for ci, (from_idx, from_y, to_idx, to_y, c_color, c_label) in enumerate(_comparison_pairs):
