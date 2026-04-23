@@ -455,17 +455,11 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _thin_ticks(ax, xs)
 
         elif chart_type == "line":
-            # Smooth main line
+            # Simple, clean: line + soft fill. Let matplotlib auto-scale Y.
             ax.plot(x_indices, ys, color=ACCENT, linewidth=2.4, zorder=4,
                     solid_capstyle="round", solid_joinstyle="round")
-            # Layered area fill for soft gradient feel (3 stacked alphas)
-            from matplotlib.colors import to_rgb
-            r, g, b = to_rgb(ACCENT_GLOW)
-            ax.fill_between(x_indices, ys, alpha=0.18, color=ACCENT_GLOW,
+            ax.fill_between(x_indices, ys, alpha=0.15, color=ACCENT_GLOW,
                             zorder=2, linewidth=0)
-            # Lower softer layer extending further down
-            ax.fill_between(x_indices, ys, alpha=0.06, color=ACCENT_GLOW,
-                            zorder=1.5, linewidth=0)
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -619,35 +613,14 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                 return label_y if label_y is not None else 0
             return line_y
 
-        # Y-axis focused on what matters: dots + baselines, with breathing room.
-        # The line itself can extend above this — we clip to keep dots prominent.
-        focus_vals = [_resolve_dot_y(ly, gy) for _, ly, gy, _, _ in _annotations]
-        focus_vals += [v for v in [_wow_baseline_y, _dod_baseline_y] if v is not None]
-        focus_max = max(focus_vals) if focus_vals else 1
-        focus_min = min(focus_vals) if focus_vals else 0
-        line_max = max(ys) if ys else focus_max
+        # Give top of chart a bit of breathing room for the badges.
+        y_bottom, y_top = ax.get_ylim()
+        ax.set_ylim(bottom=y_bottom, top=y_top + (y_top - y_bottom) * 0.18)
 
-        # Clip the y-axis to focus region when line max far exceeds it (3x).
-        # Otherwise show all data so the trend is visible.
-        if focus_max > 0 and line_max > focus_max * 3:
-            y_max = focus_max * 1.5
-            _spike_clipped = True
-        else:
-            y_max = line_max
-            _spike_clipped = False
-
-        y_min = min(0, focus_min) if focus_min >= 0 else focus_min
-        y_range = max(y_max - y_min, abs(y_max) * 0.01, 1e-9)
-        ax.set_ylim(bottom=y_min - y_range * 0.05, top=y_max + y_range * 0.22)
-
-        # Spike indicator if Y was clipped — bottom-left, subtle
-        if _spike_clipped:
-            ax.text(0.005, 0.04, f"↑ peak {_fmt_val(line_max)}",
-                    transform=ax.transAxes, color=TEXT_DIM,
-                    fontsize=8.5, va="bottom", ha="left", zorder=10,
-                    fontweight="500")
-
-        # ── Dots at key dates with soft glow halo ───────────────────
+        # ── Dots at key dates with soft glow halo + value label ──────
+        import matplotlib.patheffects as _pe
+        _ylim_bottom, _ylim_top = ax.get_ylim()
+        _y_span = _ylim_top - _ylim_bottom
         for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
             dot_y = _resolve_dot_y(a_line_y, a_label_y)
             # Soft glow (large transparent halo)
@@ -658,6 +631,18 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             # Filled coloured dot with white edge
             ax.plot(a_idx, dot_y, "o", color=a_color, markersize=8,
                     zorder=7, markeredgecolor="#ffffff", markeredgewidth=1.4)
+            # Value label above dot — Steep-style: tight, clean, readable
+            _label_offset = _y_span * 0.05
+            _label_y_pos = dot_y + _label_offset
+            _va = "bottom"
+            # If too close to top, place below the dot instead
+            if _label_y_pos > _ylim_top - _y_span * 0.05:
+                _label_y_pos = dot_y - _label_offset
+                _va = "top"
+            ax.text(a_idx, _label_y_pos, _fmt_val(dot_y),
+                    ha="center", va=_va, fontsize=9.5,
+                    color=a_color, fontweight="700", zorder=8,
+                    path_effects=[_pe.withStroke(linewidth=3.5, foreground=BG)])
 
         # ── Summary badges (top-right) — single source of truth ──────────
         summary = []  # (label, arrow, pct, base, current, color)
