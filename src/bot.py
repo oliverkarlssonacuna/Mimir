@@ -1123,20 +1123,26 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
             import json as _json
 
-            # Extract BQ ground-truth dot values from saved_anomalies
+            # Extract BQ ground-truth dot values from saved_anomalies.
+            # For percent metrics, scale to match chart (which is value*100).
+            _is_percent = metric_id in percent_metric_ids
+            def _scale(v):
+                if v is None:
+                    return None
+                return v * 100 if _is_percent else v
             _chart_anomaly_val = None
             _chart_baseline_val = None
             _chart_baseline_val_2 = None
             _chart_pace_val = None
             for sa in saved_anomalies:
                 if sa.comparison in ("wow", "dod") and _chart_anomaly_val is None:
-                    _chart_anomaly_val = sa.current_value
+                    _chart_anomaly_val = _scale(sa.current_value)
                 if sa.comparison in ("wow", "pace") and _chart_baseline_val is None:
-                    _chart_baseline_val = sa.baseline_value
+                    _chart_baseline_val = _scale(sa.baseline_value)
                 if sa.comparison == "dod" and _chart_baseline_val_2 is None:
-                    _chart_baseline_val_2 = sa.baseline_value
+                    _chart_baseline_val_2 = _scale(sa.baseline_value)
                 if sa.comparison == "pace":
-                    _chart_pace_val = sa.current_value
+                    _chart_pace_val = _scale(sa.current_value)
 
             # Patch zero values in steep_data with BQ ground-truth for key dates
             _date_overrides = {}
