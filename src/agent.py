@@ -303,7 +303,34 @@ def _thin_ticks(ax, xs: list[str], max_ticks: int = 15):
         ax.set_xticklabels([xs[i] for i in tick_positions], rotation=40, ha="right", fontsize=9)
 
 
-def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title: str, group_col: str = "", highlight_values: str = "", anomaly_date: str = "", anomaly_change_pct: str = "", baseline_date: str = "", baseline_date_2: str = "", pace_date: str = "", anomaly_value: float | None = None, baseline_value: float | None = None, baseline_value_2: float | None = None, pace_value: float | None = None) -> str:
+def _plot_results(
+    data_json: str,
+    chart_type: str,
+    x_col: str,
+    y_col: str,
+    title: str,
+    group_col: str = "",
+    highlight_values: str = "",
+    anomaly_date: str = "",
+    anomaly_change_pct: str = "",
+    baseline_date: str = "",
+    baseline_date_2: str = "",
+    pace_date: str = "",
+    anomaly_value: float | None = None,
+    baseline_value: float | None = None,
+    baseline_value_2: float | None = None,
+    pace_value: float | None = None,
+    # ── Statistical context (optional) ────────────────────────────────────
+    # When provided, draws a shaded normal-range band behind the line and marks
+    # outlier points (outside Tukey fences) with a red ring.
+    iqr_low: float | None = None,         # P25 — bottom of IQR band
+    iqr_high: float | None = None,        # P75 — top of IQR band
+    tukey_low: float | None = None,       # P25 - 1.5*IQR — outlier threshold
+    tukey_high: float | None = None,      # P75 + 1.5*IQR — outlier threshold
+    median_value: float | None = None,    # historical median (dashed line)
+    today_classification: str = "",       # "typical"|"elevated"|"outlier" — sets badge
+    today_label: str = "",                # short value summary, e.g. "Today: 100.0"
+) -> str:
     """Render a chart and save to a temp PNG. Returns the file path."""
     import matplotlib
     matplotlib.use("Agg")
@@ -455,11 +482,36 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
             _thin_ticks(ax, xs)
 
         elif chart_type == "line":
+            # ── Normal-range band (P25–P75) — drawn behind line if stats provided ──
+            # Gives the eye an immediate "is today inside or outside normal?" answer.
+            if iqr_low is not None and iqr_high is not None and iqr_high > iqr_low:
+                ax.fill_between(
+                    x_indices, iqr_low, iqr_high,
+                    color="#94a3b8", alpha=0.10, linewidth=0, zorder=1,
+                    label="Normal range (P25–P75)",
+                )
+            if median_value is not None:
+                ax.axhline(
+                    median_value, color="#64748b", linewidth=0.8,
+                    linestyle=(0, (4, 4)), alpha=0.6, zorder=1,
+                )
+
             # Simple, clean: line + soft fill. Let matplotlib auto-scale Y.
             ax.plot(x_indices, ys, color=ACCENT, linewidth=2.4, zorder=4,
                     solid_capstyle="round", solid_joinstyle="round")
             ax.fill_between(x_indices, ys, alpha=0.15, color=ACCENT_GLOW,
                             zorder=2, linewidth=0)
+
+            # ── Outlier markers — red ring around any point beyond Tukey fences ──
+            if tukey_low is not None and tukey_high is not None:
+                for i, y_val in enumerate(ys):
+                    if y_val > tukey_high or y_val < tukey_low:
+                        ax.plot(
+                            i, y_val, "o", markerfacecolor="none",
+                            markeredgecolor=RED, markeredgewidth=1.6,
+                            markersize=9, zorder=5,
+                        )
+
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -670,6 +722,31 @@ def _plot_results(data_json: str, chart_type: str, x_col: str, y_col: str, title
                           edgecolor=b_color, alpha=0.97, linewidth=1.2),
                 zorder=9,
             )
+
+    # ── Classification badge (top-left, under title) ──────────────────────
+    # When statistical context is provided, show whether today's value is
+    # within the historical normal range. This is the single most important
+    # signal for volatile metrics like ratios with low volume.
+    if today_classification and today_label:
+        _badge_color = {
+            "typical":  "#34d399",  # emerald — within IQR (P25–P75)
+            "elevated": "#fbbf24",  # amber — between P75 and Tukey fence
+            "outlier":  "#fb7185",  # rose — beyond Tukey fence (true outlier)
+        }.get(today_classification, "#94a3b8")
+        _badge_text = {
+            "typical":  f"● Typical · {today_label}",
+            "elevated": f"● Elevated · {today_label}",
+            "outlier":  f"● Outlier · {today_label}",
+        }.get(today_classification, today_label)
+        ax.text(
+            0.01, 0.97, _badge_text,
+            transform=ax.transAxes,
+            ha="left", va="top",
+            fontsize=10, color=_badge_color, fontweight="700",
+            bbox=dict(boxstyle="round,pad=0.55", facecolor=SURFACE,
+                      edgecolor=_badge_color, alpha=0.97, linewidth=1.2),
+            zorder=10,
+        )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
     ax.set_title(title, fontsize=14, fontweight="700", color=TEXT, loc="left", pad=16)

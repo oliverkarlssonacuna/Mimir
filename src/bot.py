@@ -67,9 +67,6 @@ _thread_metrics: dict[int, dict] = {}
 # metric_id → list[Anomaly], for use in deep analysis button
 _pending_anomalies: dict[str, list["Anomaly"]] = {}
 
-# metric_id → display label for analyses currently in progress (for SIGTERM reporting)
-_active_analyses: dict[str, str] = {}
-
 # Thread ID → asyncio.Task for auto-close timer
 _thread_timers: dict[int, asyncio.Task] = {}
 
@@ -862,21 +859,6 @@ async def on_ready():
     if not monitor_loop.is_running():
         monitor_loop.start()
 
-    # SIGTERM handler: Cloud Run sends SIGTERM before killing the container.
-    # Report any in-progress analyses to the error channel so they're not silently lost.
-    import signal as _signal
-    def _on_sigterm(*_):
-        async def _notify():
-            err_ch = _get_error_channel()
-            if err_ch and _active_analyses:
-                labels = ", ".join(f"`{v}`" for v in _active_analyses.values())
-                await err_ch.send(
-                    f"⚠️ **Bot restarting (SIGTERM)** — {len(_active_analyses)} analysis in progress was interrupted: {labels}\n"
-                    f"The analysis did not complete. Please re-trigger if needed."
-                )
-        asyncio.create_task(_notify())
-    _signal.signal(_signal.SIGTERM, _on_sigterm)
-
 
 @bot.event
 async def on_interaction(interaction: discord.Interaction):
@@ -898,17 +880,14 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
     metric_id = parts[1] if len(parts) > 1 else ""
     reference_date = parts[2] if len(parts) > 2 else datetime.now().strftime("%Y-%m-%d")
 
-    # Find metric info — check both Steep metrics and BQ metrics
+    # Find metric info
     metric_info = next((m for m in detector._metric_configs if m["metric_id"] == metric_id), None)
-    if metric_info is None:
-        metric_info = next((m for m in getattr(detector, "_bq_metric_configs", []) if m["metric_id"] == metric_id), None)
 
     if action == "analyse" and metric_info:
         # Guard against double-acknowledge (e.g. user double-clicked)
         if interaction.response.is_done():
             return
         await interaction.response.defer(thinking=True)
-        _active_analyses[metric_id] = metric_info.get("metric_label", metric_id)
 
         # Disable buttons and mark as "analysing" on the original message
         if interaction.message:
@@ -924,7 +903,6 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 embed = interaction.message.embeds[0] if interaction.message.embeds else None
                 if embed:
                     embed.set_footer(text=f"\ud83d\udd0d Analysed by {interaction.user.display_name}")
-                    embed.timestamp = datetime.utcnow()
                     await interaction.message.edit(embed=embed, view=disabled_view)
                 else:
                     await interaction.message.edit(view=disabled_view)
@@ -994,39 +972,23 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # For WoW/DoD-only, stop at yesterday so the anomaly dot is the last visible point
             chart_end_date = today_date if "pace" in triggered_comps else (today_date - _td(days=1))
 
-            # Chart window: start at most 14 days before the earliest key date
-            # (WoW/DoD baseline dates), but never before admin-configured baseline.
-            _key_dates = [d for d in [baseline_date, baseline_date_2, chart_anomaly_date, chart_pace_date] if d]
-            if _key_dates:
-                _earliest_key = datetime.strptime(min(_key_dates), "%Y-%m-%d").date()
-                chart_start_date = max(baseline_date_obj, _earliest_key - _td(days=14))
+            # Chart window sized to the comparison type — enough context to see the pattern,
+            # but not so much that a historical spike (e.g. closed beta in March) crushes the Y-axis.
+            # Rule: 3 full weeks for WoW/Pace (weekly rhythm visible), 2 weeks for DoD-only.
+            if "wow" in triggered_comps or "pace" in triggered_comps:
+                chart_days = 21  # 3 weeks: see 3x the weekly cycle
             else:
-                chart_start_date = baseline_date_obj
+                chart_days = 14  # DoD-only: 2 weeks of daily trend is plenty
+
+            chart_start_date = chart_end_date - _td(days=chart_days - 1)
             # Never go before the baseline start date (data before this is unreliable)
             chart_start_date = max(chart_start_date, baseline_date_obj)
             days_since_baseline = (chart_end_date - chart_start_date).days + 1
 
             from concurrent.futures import ThreadPoolExecutor as _TPE
-            _is_bq_metric = bool(metric_info.get("sql_query"))
             def _fetch_steep():
-                """Fetch chart data.
-                BQ metrics: re-run their sql_query (already returns date+value rows).
-                Steep metrics: BQ daily_values table, fallback to Steep API."""
-                if _is_bq_metric:
-                    sql_query = metric_info.get("sql_query", "")
-                    try:
-                        rows = bq.run_query(sql_query)
-                        data = [{"date": r["date"] if isinstance(r["date"], str) else str(r["date"]), "value": float(r["value"])} for r in rows if r.get("date") is not None and r.get("value") is not None]
-                        # Filter to chart window
-                        data = [p for p in data if chart_start_date.isoformat() <= p["date"] <= chart_end_date.isoformat()]
-                        if metric_id in percent_metric_ids:
-                            data = [{**p, "value": round(p["value"] * 100, 4), "unit": "%"} for p in data]
-                        logger.info("Chart data for BQ metric %s: %d rows.", metric_id, len(data))
-                        return data
-                    except Exception as e:
-                        logger.error("BQ metric sql_query failed for chart %s: %s", metric_id, e)
-                        return []
-
+                """Fetch chart data from BQ daily values table (fast ~2s).
+                Falls back to Steep API only if BQ has no data for this metric."""
                 try:
                     rows = bq.fetch_daily_values(
                         metric_id=metric_id,
@@ -1122,6 +1084,21 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 correlated_metrics = corr_future.result()
 
             import json as _json
+            steep_json = _json.dumps(steep_data)
+
+            # ── Robust statistical context ────────────────────────────────────
+            # Compute median + IQR + Tukey fences over the chart window so the
+            # graph and prompt can show whether today's value is actually
+            # outside the historical normal range — vs just being a noisy
+            # data point in a structurally volatile metric.
+            #
+            # Note: `steep_data` is ALREADY scaled to chart coordinates for
+            # percent metrics (×100 inside _fetch_steep), so the stats live
+            # in the same coordinate space as the chart line, IQR band, and
+            # dot annotations — no extra scaling needed here.
+            from stats_utils import compute_stats
+            _values = [p.get("value") for p in steep_data if p.get("value") is not None]
+            _stats = compute_stats(_values)
 
             # Determine PRIMARY comparison for the chart annotation (single most informative):
             # WoW > DoD > Pace — prevents 3 overlapping arrows cluttering the graph.
@@ -1130,45 +1107,52 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 None,
             )
 
-            # Extract BQ ground-truth dot values — scale for percent metrics.
-            _is_percent = metric_id in percent_metric_ids
-            def _scale(v):
-                if v is None:
-                    return None
-                return v * 100 if _is_percent else v
+            # Extract BQ ground-truth dot values for the PRIMARY comparison only
             _chart_anomaly_val = None
-            _chart_baseline_val = None    # WoW/Pace baseline (yellow)
+            _chart_baseline_val = None    # WoW baseline (yellow) or Pace baseline (yellow)
             _chart_baseline_val_2 = None  # DoD baseline (green) — only for DoD-primary
             _chart_pace_val = None
             for sa in saved_anomalies:
+                # Red anomaly dot — yesterday's actual value (WoW or DoD triggers)
                 if sa.comparison in ("wow", "dod") and _chart_anomaly_val is None:
-                    _chart_anomaly_val = _scale(sa.current_value)
-                # Only set baseline for the primary comparison to keep chart clean
+                    _chart_anomaly_val = sa.current_value
+                # Yellow baseline — only for WoW/Pace primary
                 if _primary_comp in ("wow", "pace") and sa.comparison == _primary_comp and _chart_baseline_val is None:
-                    _chart_baseline_val = _scale(sa.baseline_value)
+                    _chart_baseline_val = sa.baseline_value
+                # Green baseline — only for DoD primary
                 if _primary_comp == "dod" and sa.comparison == "dod" and _chart_baseline_val_2 is None:
-                    _chart_baseline_val_2 = _scale(sa.baseline_value)
+                    _chart_baseline_val_2 = sa.baseline_value
+                # Orange pace dot — only for Pace primary
                 if _primary_comp == "pace" and sa.comparison == "pace" and _chart_pace_val is None:
-                    _chart_pace_val = _scale(sa.current_value)
+                    _chart_pace_val = sa.current_value
 
-            # Patch zero values in steep_data with BQ ground-truth for primary dates
-            _date_overrides = {}
-            if chart_anomaly_date and _chart_anomaly_val is not None:
-                _date_overrides[chart_anomaly_date] = _chart_anomaly_val
-            if _primary_comp in ("wow", "pace") and baseline_date and _chart_baseline_val is not None:
-                _date_overrides[baseline_date] = _chart_baseline_val
-            if _primary_comp == "dod" and baseline_date_2 and _chart_baseline_val_2 is not None:
-                _date_overrides[baseline_date_2] = _chart_baseline_val_2
-            if _primary_comp == "pace" and chart_pace_date and _chart_pace_val is not None:
-                _date_overrides[chart_pace_date] = _chart_pace_val
-            steep_data = [
-                {**p, "value": _date_overrides[p["date"]]}
-                if p.get("date") in _date_overrides and p.get("value", 1) == 0
-                else p
-                for p in steep_data
-            ]
+            # For percent metrics the chart line is already scaled ×100 — scale dot values to match
+            if metric_id in percent_metric_ids:
+                if _chart_anomaly_val is not None:
+                    _chart_anomaly_val *= 100
+                if _chart_baseline_val is not None:
+                    _chart_baseline_val *= 100
+                if _chart_baseline_val_2 is not None:
+                    _chart_baseline_val_2 *= 100
+                if _chart_pace_val is not None:
+                    _chart_pace_val *= 100
 
-            steep_json = _json.dumps(steep_data)
+            # ── Classify today's value vs historical normal range ─────────────
+            # "today" = pace value if pace triggered, else anomaly value (yesterday)
+            _today_val_for_stats = (
+                _chart_pace_val if _chart_pace_val is not None else _chart_anomaly_val
+            )
+            _today_classification = ""
+            _today_label = ""
+            if _stats is not None and _today_val_for_stats is not None:
+                _today_classification = _stats.classify(_today_val_for_stats)
+                _suffix = "%" if metric_id in percent_metric_ids else ""
+                _today_label = f"Today: {_today_val_for_stats:,.1f}{_suffix}"
+
+            # For HIGH-volatility metrics, suppress the comparison arrows because
+            # they're misleading (a single point swing in a noisy series). The IQR
+            # band tells the story instead. For low/medium volatility, keep arrows.
+            _suppress_arrows = (_stats is not None and _stats.volatility == "high")
 
             # Pre-render chart in thread executor — savefig blocks event loop if run inline
             from agent import _plot_results
@@ -1182,21 +1166,33 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     x_col="date",
                     y_col="value",
                     title=metric_info["metric_label"],
-                    anomaly_date=chart_anomaly_date,
-                    # Only pass the primary comparison dates — one arrow on the chart
-                    baseline_date=baseline_date if _primary_comp in ("wow", "pace") else "",
-                    baseline_date_2=baseline_date_2 if _primary_comp == "dod" else "",
-                    pace_date=chart_pace_date if _primary_comp == "pace" else "",
-                    anomaly_value=_chart_anomaly_val,
-                    baseline_value=_chart_baseline_val,
-                    baseline_value_2=_chart_baseline_val_2,
-                    pace_value=_chart_pace_val,
+                    anomaly_date="" if _suppress_arrows else chart_anomaly_date,
+                    # Only pass the dates relevant to the primary comparison
+                    baseline_date=("" if _suppress_arrows else
+                                   (baseline_date if _primary_comp in ("wow", "pace") else "")),
+                    baseline_date_2=("" if _suppress_arrows else
+                                     (baseline_date_2 if _primary_comp == "dod" else "")),
+                    pace_date=("" if _suppress_arrows else
+                               (chart_pace_date if _primary_comp == "pace" else "")),
+                    anomaly_value=None if _suppress_arrows else _chart_anomaly_val,
+                    baseline_value=None if _suppress_arrows else _chart_baseline_val,
+                    baseline_value_2=None if _suppress_arrows else _chart_baseline_val_2,
+                    pace_value=None if _suppress_arrows else _chart_pace_val,
+                    # Statistical context — drives the IQR band, outlier rings, and badge
+                    iqr_low=_stats.p25 if _stats else None,
+                    iqr_high=_stats.p75 if _stats else None,
+                    tukey_low=_stats.tukey_low if _stats else None,
+                    tukey_high=_stats.tukey_high if _stats else None,
+                    median_value=_stats.median if _stats else None,
+                    today_classification=_today_classification,
+                    today_label=_today_label,
                 )
             )
             pre_chart = chart_path if not chart_path.startswith("error") else None
 
             # Single Gemini call — only analysis text, no tool calls
-            # Build ground-truth trigger values with exact dates for each comparison.
+            # Build ground-truth trigger values from saved_anomalies with full date context.
+            # These are the EXACT values that triggered the alert — use these, not Steep API values.
             trigger_lines = []
             for sa in saved_anomalies:
                 comp_label = _comparison_label(sa.comparison)
@@ -1206,6 +1202,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 else:
                     cur_fmt  = f"{sa.current_value:,.1f}"
                     base_fmt = f"{sa.baseline_value:,.1f}"
+                # Include exact dates so the LLM can reference them precisely
                 if sa.comparison == "wow":
                     date_ctx = f"{sa.baseline_date} (last week) → {reference_date} (yesterday)"
                 elif sa.comparison == "dod":
@@ -1221,13 +1218,86 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             trigger_values_block = "\n".join(trigger_lines)
             n_triggers = len(saved_anomalies)
 
+            # ---- Statistical context block (robust stats) ----
+            stat_lines: list[str] = []
+            interp_rules: list[str] = []
+            if _stats is not None:
+                # Stats are already in chart-coordinate space (×100 for percent
+                # metrics), so we only append a "%" suffix — never re-multiply.
+                _is_percent = metric_id in percent_metric_ids
+                def _fmt_stat(v):
+                    if v is None:
+                        return "—"
+                    return f"{v:,.2f}%" if _is_percent else f"{v:,.2f}"
+
+                if _stats.cv_robust is not None:
+                    stat_lines.append(
+                        f"- Sample: n={_stats.n} days  |  Volatility: **{_stats.volatility}** "
+                        f"(CV_robust={_stats.cv_robust:.2f})"
+                    )
+                else:
+                    stat_lines.append(
+                        f"- Sample: n={_stats.n} days  |  Volatility: **{_stats.volatility}**"
+                    )
+                stat_lines.append(
+                    f"- Median: {_fmt_stat(_stats.median)}  |  "
+                    f"Typical range (P25–P75): {_fmt_stat(_stats.p25)} – {_fmt_stat(_stats.p75)}  |  "
+                    f"Min–Max: {_fmt_stat(_stats.min_val)} – {_fmt_stat(_stats.max_val)}"
+                )
+                stat_lines.append(
+                    f"- Outlier fences (Tukey 1.5×IQR): {_fmt_stat(_stats.tukey_low)} – {_fmt_stat(_stats.tukey_high)}"
+                )
+                if _today_val_for_stats is not None and _today_classification:
+                    stat_lines.append(
+                        f"- **Today's value {_fmt_stat(_today_val_for_stats)} is classified as: "
+                        f"{_today_classification.upper()}**"
+                    )
+                if _stats.n < 10:
+                    stat_lines.append(
+                        f"- ⚠️ Low sample size ({_stats.n} < 10) — statistical context is less reliable."
+                    )
+
+                # Interpretation rules based on classification
+                if _today_classification == "typical":
+                    interp_rules.append(
+                        "- Today's value sits **inside the historical typical range (P25–P75)**. "
+                        "The triggered % change reflects normal day-to-day noise on a structurally volatile metric, "
+                        "NOT a genuine anomaly. State this clearly and DO NOT invent a cause."
+                    )
+                elif _today_classification == "elevated":
+                    interp_rules.append(
+                        "- Today's value is **outside P25–P75 but inside the Tukey outlier fences** — elevated but "
+                        "still within the historical envelope. Mention it is on the high/low side of normal but "
+                        "avoid framing it as a critical anomaly without supporting signals."
+                    )
+                elif _today_classification == "outlier":
+                    interp_rules.append(
+                        "- Today's value is **beyond the Tukey 1.5×IQR fences** — a genuine statistical outlier. "
+                        "Treat as a real anomaly and commit to the most plausible cause from milestones/Jira/correlated metrics."
+                    )
+                if _stats.volatility == "high":
+                    interp_rules.append(
+                        "- This metric is **structurally high-volatility** (CV_robust ≥ 0.5). "
+                        "Single-day % changes (DoD/WoW/Pace) are inherently noisy and should NOT be over-interpreted. "
+                        "Anchor the analysis to where today's value sits in the historical distribution, not to the % change."
+                    )
+
+            stat_block = "\n".join(stat_lines) if stat_lines else "- (insufficient history to compute statistics)"
+            interp_block = "\n".join(interp_rules) if interp_rules else (
+                "- Interpret the % change in the context of the metric's normal day-to-day variation."
+            )
+
             prompt = (
                 f"Today's date: {today}\n\n"
                 f"## Metric: {metric_info['metric_label']} (id: {metric_id})\n"
                 f"Direction: {metric_info['direction']}\n\n"
-                f"## TRIGGER VALUES (ground truth — use THESE exact numbers and dates):\n"
+                f"## TRIGGER VALUES (ground truth — use THESE exact numbers and dates in your analysis):\n"
                 f"{trigger_values_block}\n"
                 f"(The comparison marked '← shown in chart' is the one visualised in the attached graph.)\n\n"
+                f"## STATISTICAL CONTEXT (robust stats over the daily series):\n"
+                f"{stat_block}\n\n"
+                f"## INTERPRETATION RULES (apply these BEFORE picking a cause):\n"
+                f"{interp_block}\n\n"
                 f"## Daily data ({baseline} to {reference_date}) — use for trend/context only:\n"
                 f"{steep_json}\n\n"
                 f"## Game milestones:\n{_get_setting('game_milestones', Config.GAME_MILESTONES)}\n\n"
@@ -1240,7 +1310,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "Use this EXACT structure with Discord markdown. Each section is a bold label followed by 1-2 sentences max:\n\n"
                 "**📉 What happened**\n"
                 f"<One sentence covering ALL {n_triggers} triggered comparison(s): metric name, exact date ({reference_date}), "
-                "exact raw values and % change for each — e.g. 'down **-25.0% WoW** (24 → 18) and **-18.2% DoD** (22 → 18) on Apr 27'.>\n\n"
+                "exact raw values, and % change for each triggered comparison (e.g. '...down **-25.0% WoW** (24 → 18) and **-18.2% DoD** (22 → 18) on Apr 27').>\n\n"
                 "**🔍 Likely cause**\n"
                 "<One sentence: name the most probable cause explicitly — beta end, release, known event, or data pattern. "
                 "Cross-reference milestones, Jira releases, and team notes. No hedging like 'could be many things'.>\n\n"
@@ -1259,85 +1329,41 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "- Do NOT say 'investigate further'.\n"
             )
 
-            import threading as _threading
-
             loop = asyncio.get_running_loop()
+            from concurrent.futures import ThreadPoolExecutor as _TPE2
+            with _TPE2(max_workers=1) as gemini_exec:
+                response = await loop.run_in_executor(gemini_exec, lambda: agent.ask(prompt, tools_enabled=False))
 
-            # Send chart immediately — it's already rendered and ready
-            if pre_chart:
-                try:
-                    await thread.send(file=discord.File(pre_chart, filename="chart.png"))
-                except Exception as e:
-                    logger.warning("Could not send pre-rendered chart: %s", e)
-                finally:
-                    try:
-                        os.remove(pre_chart)
-                    except OSError:
-                        pass
-
-            # Send streaming placeholder that we'll edit as tokens arrive
-            stream_msg = await thread.send("🔍 Analysing…")
-
-            # Run Gemini streaming in a thread, feed chunks via asyncio queue
-            text_queue: asyncio.Queue = asyncio.Queue()
-
-            def _run_stream():
-                try:
-                    for chunk in agent.ask_stream(prompt):
-                        loop.call_soon_threadsafe(text_queue.put_nowait, chunk)
-                except Exception as exc:
-                    loop.call_soon_threadsafe(text_queue.put_nowait, exc)
-                loop.call_soon_threadsafe(text_queue.put_nowait, None)  # sentinel
-
-            _threading.Thread(target=_run_stream, daemon=True).start()
-
-            accumulated = ""
-            last_edit = loop.time()
-            EDIT_INTERVAL = 3.0  # seconds between Discord edits (rate limit safety)
-
-            while True:
-                item = await text_queue.get()
-                if item is None:
-                    break
-                if isinstance(item, Exception):
-                    raise item
-                accumulated += item
-                now = loop.time()
-                if now - last_edit >= EDIT_INTERVAL and len(accumulated) > 50:
-                    try:
-                        preview = accumulated[:1990] + ("…" if len(accumulated) > 1990 else "")
-                        await stream_msg.edit(content=preview)
-                        last_edit = now
-                    except discord.HTTPException:
-                        pass
-
-            text = accumulated or "Here is the analysis:"
-
-            # Final edit with complete text (handles potential last chunk not yet edited)
-            final_chunks = split_message(text)
-            try:
-                await stream_msg.edit(content=final_chunks[0])
-            except discord.HTTPException:
-                pass
-            for chunk in final_chunks[1:]:
-                await thread.send(content=chunk)
+            text = response.text or "Here is the analysis:"
+            # Use pre-rendered chart, fall back to agent chart if pre-render failed
+            final_chart = pre_chart or response.chart_path
+            if final_chart:
+                chunks = split_message(text)
+                await thread.send(
+                    content=chunks[0],
+                    file=discord.File(final_chart, filename="chart.png"),
+                )
+                for chunk in chunks[1:]:
+                    await thread.send(content=chunk)
+                for p in (pre_chart, response.chart_path):
+                    if p:
+                        try:
+                            os.remove(p)
+                        except OSError:
+                            pass
+            else:
+                for chunk in split_message(response.text):
+                    await thread.send(content=chunk)
 
             if steep_url:
                 await thread.send(f"🔗 [View metric in Steep]({steep_url})")
 
         except Exception as e:
             logger.error("Analysis thread failed: %s", e)
-            import traceback as _tb
             debug_ch = _get_error_channel()
             if debug_ch:
-                tb_short = "".join(_tb.format_exception(type(e), e, e.__traceback__))[-1500:]
-                await debug_ch.send(
-                    f"❌ **Analysis failed** for `{metric_info.get('metric_label', metric_id)}`\n"
-                    f"```\n{tb_short}\n```"
-                )
+                await debug_ch.send(f"❌ Analysis thread failed for `{metric_info.get('metric_label', metric_id)}`: {e}")
             await interaction.followup.send("Could not create analysis thread — see debug channel for details.", ephemeral=True)
-        finally:
-            _active_analyses.pop(metric_id, None)
 
     elif action == "handled":
         handled_by = interaction.user.display_name
