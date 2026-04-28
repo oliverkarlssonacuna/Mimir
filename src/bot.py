@@ -1123,36 +1123,43 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
 
             import json as _json
 
-            # Extract BQ ground-truth dot values from saved_anomalies.
-            # For percent metrics, scale to match chart (which is value*100).
+            # Determine PRIMARY comparison for the chart annotation (single most informative):
+            # WoW > DoD > Pace — prevents 3 overlapping arrows cluttering the graph.
+            _primary_comp = next(
+                (c for c in ("wow", "dod", "pace") if c in triggered_comps),
+                None,
+            )
+
+            # Extract BQ ground-truth dot values — scale for percent metrics.
             _is_percent = metric_id in percent_metric_ids
             def _scale(v):
                 if v is None:
                     return None
                 return v * 100 if _is_percent else v
             _chart_anomaly_val = None
-            _chart_baseline_val = None
-            _chart_baseline_val_2 = None
+            _chart_baseline_val = None    # WoW/Pace baseline (yellow)
+            _chart_baseline_val_2 = None  # DoD baseline (green) — only for DoD-primary
             _chart_pace_val = None
             for sa in saved_anomalies:
                 if sa.comparison in ("wow", "dod") and _chart_anomaly_val is None:
                     _chart_anomaly_val = _scale(sa.current_value)
-                if sa.comparison in ("wow", "pace") and _chart_baseline_val is None:
+                # Only set baseline for the primary comparison to keep chart clean
+                if _primary_comp in ("wow", "pace") and sa.comparison == _primary_comp and _chart_baseline_val is None:
                     _chart_baseline_val = _scale(sa.baseline_value)
-                if sa.comparison == "dod" and _chart_baseline_val_2 is None:
+                if _primary_comp == "dod" and sa.comparison == "dod" and _chart_baseline_val_2 is None:
                     _chart_baseline_val_2 = _scale(sa.baseline_value)
-                if sa.comparison == "pace":
+                if _primary_comp == "pace" and sa.comparison == "pace" and _chart_pace_val is None:
                     _chart_pace_val = _scale(sa.current_value)
 
-            # Patch zero values in steep_data with BQ ground-truth for key dates
+            # Patch zero values in steep_data with BQ ground-truth for primary dates
             _date_overrides = {}
             if chart_anomaly_date and _chart_anomaly_val is not None:
                 _date_overrides[chart_anomaly_date] = _chart_anomaly_val
-            if baseline_date and _chart_baseline_val is not None:
+            if _primary_comp in ("wow", "pace") and baseline_date and _chart_baseline_val is not None:
                 _date_overrides[baseline_date] = _chart_baseline_val
-            if baseline_date_2 and _chart_baseline_val_2 is not None:
+            if _primary_comp == "dod" and baseline_date_2 and _chart_baseline_val_2 is not None:
                 _date_overrides[baseline_date_2] = _chart_baseline_val_2
-            if chart_pace_date and _chart_pace_val is not None:
+            if _primary_comp == "pace" and chart_pace_date and _chart_pace_val is not None:
                 _date_overrides[chart_pace_date] = _chart_pace_val
             steep_data = [
                 {**p, "value": _date_overrides[p["date"]]}
@@ -1176,9 +1183,10 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     y_col="value",
                     title=metric_info["metric_label"],
                     anomaly_date=chart_anomaly_date,
-                    baseline_date=baseline_date or "",
-                    baseline_date_2=baseline_date_2 or "",
-                    pace_date=chart_pace_date,
+                    # Only pass the primary comparison dates — one arrow on the chart
+                    baseline_date=baseline_date if _primary_comp in ("wow", "pace") else "",
+                    baseline_date_2=baseline_date_2 if _primary_comp == "dod" else "",
+                    pace_date=chart_pace_date if _primary_comp == "pace" else "",
                     anomaly_value=_chart_anomaly_val,
                     baseline_value=_chart_baseline_val,
                     baseline_value_2=_chart_baseline_val_2,
@@ -1188,8 +1196,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             pre_chart = chart_path if not chart_path.startswith("error") else None
 
             # Single Gemini call — only analysis text, no tool calls
-            # Build ground-truth trigger values from saved_anomalies (these are the
-            # EXACT values that triggered the alert — use these, not Steep API values)
+            # Build ground-truth trigger values with exact dates for each comparison.
             trigger_lines = []
             for sa in saved_anomalies:
                 comp_label = _comparison_label(sa.comparison)
@@ -1199,17 +1206,28 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 else:
                     cur_fmt  = f"{sa.current_value:,.1f}"
                     base_fmt = f"{sa.baseline_value:,.1f}"
+                if sa.comparison == "wow":
+                    date_ctx = f"{sa.baseline_date} (last week) → {reference_date} (yesterday)"
+                elif sa.comparison == "dod":
+                    date_ctx = f"{sa.baseline_date} (day before) → {reference_date} (yesterday)"
+                elif sa.comparison == "pace":
+                    date_ctx = f"today {today} pace vs {sa.baseline_date} (same time last week)"
+                else:
+                    date_ctx = sa.baseline_date or ""
+                chart_marker = " ← shown in chart" if sa.comparison == _primary_comp else ""
                 trigger_lines.append(
-                    f"- {comp_label}: {base_fmt} → {cur_fmt} ({sa.change_pct:+.1%})"
+                    f"- {comp_label} [{date_ctx}]: {base_fmt} → {cur_fmt} ({sa.change_pct:+.1%}){chart_marker}"
                 )
             trigger_values_block = "\n".join(trigger_lines)
+            n_triggers = len(saved_anomalies)
 
             prompt = (
                 f"Today's date: {today}\n\n"
                 f"## Metric: {metric_info['metric_label']} (id: {metric_id})\n"
                 f"Direction: {metric_info['direction']}\n\n"
-                f"## TRIGGER VALUES (ground truth — use THESE exact numbers in your analysis, not values from the daily data):\n"
-                f"{trigger_values_block}\n\n"
+                f"## TRIGGER VALUES (ground truth — use THESE exact numbers and dates):\n"
+                f"{trigger_values_block}\n"
+                f"(The comparison marked '← shown in chart' is the one visualised in the attached graph.)\n\n"
                 f"## Daily data ({baseline} to {reference_date}) — use for trend/context only:\n"
                 f"{steep_json}\n\n"
                 f"## Game milestones:\n{_get_setting('game_milestones', Config.GAME_MILESTONES)}\n\n"
@@ -1221,7 +1239,8 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "A chart is already attached — do NOT generate a chart or call any functions.\n\n"
                 "Use this EXACT structure with Discord markdown. Each section is a bold label followed by 1-2 sentences max:\n\n"
                 "**📉 What happened**\n"
-                "<One sentence: metric name, date, exact numbers, % change vs which comparison (WoW/DoD/Pace).>\n\n"
+                f"<One sentence covering ALL {n_triggers} triggered comparison(s): metric name, exact date ({reference_date}), "
+                "exact raw values and % change for each — e.g. 'down **-25.0% WoW** (24 → 18) and **-18.2% DoD** (22 → 18) on Apr 27'.>\n\n"
                 "**🔍 Likely cause**\n"
                 "<One sentence: name the most probable cause explicitly — beta end, release, known event, or data pattern. "
                 "Cross-reference milestones, Jira releases, and team notes. No hedging like 'could be many things'.>\n\n"
@@ -1229,12 +1248,13 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "<If correlated metrics exist: list them as bullets (• Metric: ▲/▼ X%) and state whether this confirms a systemic or isolated issue. "
                 "If none: write '• No other metrics moved significantly — likely isolated to this metric.'>\n\n"
                 "**📈 Trend**\n"
-                "<One sentence: overall data shape since baseline (e.g. 'Rising through beta, sharp drop after Mar 30 close, now stabilising near zero').>\n\n"
+                "<One sentence: overall data shape since baseline — include the peak value and date, "
+                "and whether the current level is stabilising, continuing to fall, or recovering.>\n\n"
                 "Rules:\n"
-                "- Use real numbers everywhere. No vague statements.\n"
+                "- Use **bold** for every key number (values, percentages, dates).\n"
                 "- Reference specific dates (e.g. 'Mar 30 beta close') not just 'recently'.\n"
                 "- If speculating, use 'likely' or 'possibly' — once, not repeatedly.\n"
-                "- NEVER say 'unknown issue' or 'unclear cause' — always commit to the single most plausible explanation based on milestones, correlated metrics, and data shape.\n"
+                "- NEVER say 'unknown issue' or 'unclear cause' — always commit to the single most plausible explanation.\n"
                 "- Do NOT add a summary or closing sentence. Stop after **📈 Trend**.\n"
                 "- Do NOT say 'investigate further'.\n"
             )
