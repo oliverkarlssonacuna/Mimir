@@ -502,16 +502,6 @@ def _plot_results(
             ax.fill_between(x_indices, ys, alpha=0.15, color=ACCENT_GLOW,
                             zorder=2, linewidth=0)
 
-            # ── Outlier markers — red ring around any point beyond Tukey fences ──
-            if tukey_low is not None and tukey_high is not None:
-                for i, y_val in enumerate(ys):
-                    if y_val > tukey_high or y_val < tukey_low:
-                        ax.plot(
-                            i, y_val, "o", markerfacecolor="none",
-                            markeredgecolor=RED, markeredgewidth=1.6,
-                            markersize=9, zorder=5,
-                        )
-
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -746,6 +736,41 @@ def _plot_results(
             bbox=dict(boxstyle="round,pad=0.55", facecolor=SURFACE,
                       edgecolor=_badge_color, alpha=0.97, linewidth=1.2),
             zorder=10,
+        )
+
+    # ── Anomaly ring — drawn last so it sits on top of everything ─────────
+    # Uses the resolved anomaly_date / pace_date index so the ring is always
+    # on the exact date that triggered the alert — not on a historical spike
+    # and not blindly on the last point.
+    if (
+        chart_type == "line"
+        and ys is not None
+        and tukey_low is not None
+        and tukey_high is not None
+        and today_classification in ("outlier", "elevated")
+    ):
+        # Priority: reported anomaly date → pace date → last data point
+        _ring_idx = None
+        _ring_xs = all_xs if (group_col and group_col in data[0]) else xs
+        if anomaly_date:
+            for _ri, _rl in enumerate(_ring_xs):
+                if _rl.startswith(anomaly_date):
+                    _ring_idx = _ri
+                    break
+        if _ring_idx is None and pace_date:
+            for _ri, _rl in enumerate(_ring_xs):
+                if _rl.startswith(pace_date):
+                    _ring_idx = _ri
+                    break
+        if _ring_idx is None:
+            _ring_idx = len(ys) - 1
+
+        _ring_y = ys[_ring_idx]
+        _ring_color = RED if today_classification == "outlier" else YELLOW
+        ax.plot(
+            _ring_idx, _ring_y, "o", markerfacecolor="none",
+            markeredgecolor=_ring_color, markeredgewidth=1.8,
+            markersize=14, zorder=11,
         )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
