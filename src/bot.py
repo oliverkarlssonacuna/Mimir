@@ -910,11 +910,13 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 logger.warning("Could not disable buttons: %s", e)
 
         # Create analysis thread
+        _step = "init"
         try:
             steep_url = metric_info.get("steep_url")
             msg = await interaction.followup.send(content=f"📊 Analysing **{metric_info['metric_label']}**…", wait=True)
             channel = interaction.channel
             real_msg = await channel.fetch_message(msg.id)
+            _step = "create thread"
             thread = await real_msg.create_thread(
                 name=f"Analysis: {metric_info['metric_label']}", auto_archive_duration=60
             )
@@ -1073,6 +1075,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     logger.warning("Correlation fetch failed: %s", e)
                     return "None"
 
+            _step = "fetch data (BQ/Steep/Jira)"
             with _TPE(max_workers=4) as pre_exec:
                 steep_future = pre_exec.submit(_fetch_steep)
                 jira_future = pre_exec.submit(_fetch_jira)
@@ -1154,6 +1157,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             # band tells the story instead. For low/medium volatility, keep arrows.
             _suppress_arrows = (_stats is not None and _stats.volatility == "high")
 
+            _step = "render chart"
             # Pre-render chart in thread executor — savefig blocks event loop if run inline
             from agent import _plot_results
             import asyncio as _asyncio, functools as _functools
@@ -1329,11 +1333,13 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "- Do NOT say 'investigate further'.\n"
             )
 
+            _step = "Gemini analysis"
             loop = asyncio.get_running_loop()
             from concurrent.futures import ThreadPoolExecutor as _TPE2
             with _TPE2(max_workers=1) as gemini_exec:
                 response = await loop.run_in_executor(gemini_exec, lambda: agent.ask(prompt, tools_enabled=False))
 
+            _step = "send response"
             text = response.text or "Here is the analysis:"
             # Use pre-rendered chart, fall back to agent chart if pre-render failed
             final_chart = pre_chart or response.chart_path
@@ -1359,11 +1365,15 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 await thread.send(f"🔗 [View metric in Steep]({steep_url})")
 
         except Exception as e:
-            logger.error("Analysis thread failed: %s", e)
+            import traceback as _tb
+            _tb_str = _tb.format_exc()
+            logger.error("Analysis thread failed at step '%s': %s\n%s", _step, e, _tb_str)
             debug_ch = _get_error_channel()
             if debug_ch:
-                await debug_ch.send(f"❌ Analysis thread failed for `{metric_info.get('metric_label', metric_id)}`: {e}")
-            await interaction.followup.send("Could not create analysis thread — see debug channel for details.", ephemeral=True)
+                _label = metric_info.get('metric_label', metric_id) if metric_info else metric_id
+                _err_body = f"❌ **Deep analysis failed** — `{_label}`\n**Step:** `{_step}`\n**Error:** {e}\n```\n{_tb_str[-1500:]}\n```"
+                await debug_ch.send(_err_body[:2000])
+            await interaction.followup.send(f"Could not complete analysis (failed at: **{_step}**) — see debug channel for details.", ephemeral=True)
 
     elif action == "handled":
         handled_by = interaction.user.display_name
