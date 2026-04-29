@@ -646,6 +646,31 @@ def _plot_results(
         if _wow_baseline_idx is not None and _pace_idx is not None:
             _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _pace_idx, _pace_y or ys[_pace_idx], ORANGE, "Pace"))
 
+    # ── Draw comparison arrows between baseline → anomaly/pace points ─────
+    # Each pair is (from_idx, from_y, to_idx, to_y, color, label).
+    # A curved arc connects the two dots so it never overlaps the line itself.
+    for _cp_from_idx, _cp_from_y, _cp_to_idx, _cp_to_y, _cp_color, _cp_label in _comparison_pairs:
+        if _cp_from_y is None or _cp_to_y is None:
+            continue
+        # Resolve zero-valued line positions to the BQ ground-truth value
+        _arrow_from_y = _cp_from_y if _cp_from_y != 0 else _cp_to_y
+        _arrow_to_y   = _cp_to_y   if _cp_to_y   != 0 else _cp_from_y
+        # arc bends upward when the arrow travels forward in time
+        _rad = 0.25 if _cp_to_idx > _cp_from_idx else -0.25
+        ax.annotate(
+            "",
+            xy=(_cp_to_idx, _arrow_to_y),
+            xytext=(_cp_from_idx, _arrow_from_y),
+            arrowprops=dict(
+                arrowstyle="-|>",
+                color=_cp_color,
+                lw=1.6,
+                alpha=0.85,
+                connectionstyle=f"arc3,rad={_rad}",
+            ),
+            zorder=8,
+        )
+
     # ── Draw annotations ───────────────────────────────────────────────
     if _annotations and ys:
         n_pts = len(xs) if xs else 1
