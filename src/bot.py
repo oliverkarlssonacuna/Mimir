@@ -1368,12 +1368,19 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
             import traceback as _tb
             _tb_str = _tb.format_exc()
             logger.error("Analysis thread failed at step '%s': %s\n%s", _step, e, _tb_str)
-            debug_ch = _get_error_channel()
-            if debug_ch:
+            try:
                 _label = metric_info.get('metric_label', metric_id) if metric_info else metric_id
                 _err_body = f"❌ **Deep analysis failed** — `{_label}`\n**Step:** `{_step}`\n**Error:** {e}\n```\n{_tb_str[-1500:]}\n```"
-                await debug_ch.send(_err_body[:2000])
-            await interaction.followup.send(f"Could not complete analysis (failed at: **{_step}**) — see debug channel for details.", ephemeral=True)
+                _err_ch_id = Config.DISCORD_ERROR_CHANNEL_ID
+                if _err_ch_id:
+                    _err_ch = bot.get_channel(int(_err_ch_id)) or await bot.fetch_channel(int(_err_ch_id))
+                    await _err_ch.send(_err_body[:2000])
+            except Exception as _inner:
+                logger.error("Could not send error to debug channel: %s", _inner)
+            try:
+                await interaction.followup.send(f"Could not complete analysis (failed at: **{_step}**) — see debug channel for details.", ephemeral=True)
+            except Exception:
+                pass
 
     elif action == "handled":
         handled_by = interaction.user.display_name
