@@ -1152,11 +1152,6 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 _suffix = "%" if metric_id in percent_metric_ids else ""
                 _today_label = f"Today: {_today_val_for_stats:,.1f}{_suffix}"
 
-            # For HIGH-volatility metrics, suppress the comparison arrows because
-            # they're misleading (a single point swing in a noisy series). The IQR
-            # band tells the story instead. For low/medium volatility, keep arrows.
-            _suppress_arrows = (_stats is not None and _stats.volatility == "high")
-
             _step = "render chart"
             # Pre-render chart in thread executor — savefig blocks event loop if run inline
             from agent import _plot_results
@@ -1170,18 +1165,15 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     x_col="date",
                     y_col="value",
                     title=metric_info["metric_label"],
-                    anomaly_date="" if _suppress_arrows else chart_anomaly_date,
+                    anomaly_date=chart_anomaly_date,
                     # Only pass the dates relevant to the primary comparison
-                    baseline_date=("" if _suppress_arrows else
-                                   (baseline_date if _primary_comp in ("wow", "pace") else "")),
-                    baseline_date_2=("" if _suppress_arrows else
-                                     (baseline_date_2 if _primary_comp == "dod" else "")),
-                    pace_date=("" if _suppress_arrows else
-                               (chart_pace_date if _primary_comp == "pace" else "")),
-                    anomaly_value=None if _suppress_arrows else _chart_anomaly_val,
-                    baseline_value=None if _suppress_arrows else _chart_baseline_val,
-                    baseline_value_2=None if _suppress_arrows else _chart_baseline_val_2,
-                    pace_value=None if _suppress_arrows else _chart_pace_val,
+                    baseline_date=(baseline_date if _primary_comp in ("wow", "pace") else ""),
+                    baseline_date_2=(baseline_date_2 if _primary_comp == "dod" else ""),
+                    pace_date=(chart_pace_date if _primary_comp == "pace" else ""),
+                    anomaly_value=_chart_anomaly_val,
+                    baseline_value=_chart_baseline_val,
+                    baseline_value_2=_chart_baseline_val_2,
+                    pace_value=_chart_pace_val,
                     # Statistical context — drives the IQR band, outlier rings, and badge
                     iqr_low=_stats.p25 if _stats else None,
                     iqr_high=_stats.p75 if _stats else None,
