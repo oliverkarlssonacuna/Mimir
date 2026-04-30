@@ -482,26 +482,13 @@ def _plot_results(
             _thin_ticks(ax, xs)
 
         elif chart_type == "line":
-            # ── Normal-range band (P25–P75) — drawn behind line if stats provided ──
-            # Gives the eye an immediate "is today inside or outside normal?" answer.
-            if iqr_low is not None and iqr_high is not None and iqr_high > iqr_low:
-                ax.fill_between(
-                    x_indices, iqr_low, iqr_high,
-                    color="#94a3b8", alpha=0.10, linewidth=0, zorder=1,
-                    label="Normal range (P25–P75)",
-                )
-            if median_value is not None:
-                ax.axhline(
-                    median_value, color="#64748b", linewidth=0.8,
-                    linestyle=(0, (4, 4)), alpha=0.6, zorder=1,
-                )
-
-            # Simple, clean: line + soft fill. Let matplotlib auto-scale Y.
-            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.4, zorder=4,
+            # Single, clean line. No IQR band, no median dashes — those were
+            # statistically interesting but visually noisy. The story is told
+            # by the line + the two compared dots placed below.
+            ax.plot(x_indices, ys, color=ACCENT, linewidth=2.6, zorder=4,
                     solid_capstyle="round", solid_joinstyle="round")
-            ax.fill_between(x_indices, ys, alpha=0.15, color=ACCENT_GLOW,
+            ax.fill_between(x_indices, ys, alpha=0.10, color=ACCENT_GLOW,
                             zorder=2, linewidth=0)
-
             _thin_ticks(ax, xs)
 
         elif chart_type == "pie":
@@ -511,292 +498,159 @@ def _plot_results(
             ax.bar(x_indices, ys, color=ACCENT, alpha=0.85)
             _thin_ticks(ax, xs)
 
-    # ── Helper: format value for labels ─────────────────────────────────
+    # ── Minimal comparison overlay ────────────────────────────────────
+    # Design goal (Stripe / Linear / Vercel style): a single line, exactly two
+    # highlighted dots (baseline → current), and one big delta number in the
+    # corner. No multi-comparison badges, no IQR band, no classification pill.
+    # If the caller passed multiple comparisons we pick the highest-priority
+    # one (WoW > DoD > Pace) and ignore the rest.
     def _fmt_val(v):
+        if v is None:
+            return "—"
         if v == int(v):
-            return f"{int(v):,}"  # 18, 3, 1 — no decimals for whole numbers
+            return f"{int(v):,}"
         if abs(v) >= 10:
             return f"{v:,.1f}"
         if abs(v) >= 0.01:
             return f"{v:.2f}"
         return f"{v:.4f}"
 
-    def _fmt_pair(a, b):
-        """Format two values consistently — both use the same decimal style."""
-        sa, sb = _fmt_val(a), _fmt_val(b)
-        return f"{sa} → {sb}"
-
-    # ── Collect all annotation points to avoid overlap ────────────────────
-    _annotations = []  # list of (idx, line_y, label_y, color, label_text)
-    # line_y = position on Steep line (dot sits here)
-    # label_y = BQ ground-truth value (shown in label/pill/% calc)
-    _anomaly_y = None   # WoW/DoD current value (BQ)
-    _pace_y = None      # Pace current value (BQ)
-
-    # anomaly_date = WoW/DoD current (yesterday) - RED
-    if anomaly_date and chart_type != "pie":
-        search_xs = all_xs if (group_col and group_col in data[0]) else xs
-        anomaly_idx = None
-        for idx, label in enumerate(search_xs):
-            if label.startswith(anomaly_date):
-                anomaly_idx = idx
-                break
-        if anomaly_idx is not None and chart_type == "line" and ys is not None:
-            _anomaly_line_y = ys[anomaly_idx]
-            _anomaly_y = anomaly_value if anomaly_value is not None else _anomaly_line_y
-            _annotations.append((anomaly_idx, _anomaly_line_y, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
-
-    # pace_date = Pace current (today) - ORANGE
-    ORANGE = "#fb923c"  # orange-400
-    _pace_idx = None
-    if pace_date and chart_type == "line" and ys is not None:
-        search_xs = all_xs if (group_col and group_col in data[0]) else xs
-        for idx, lbl in enumerate(search_xs):
-            if lbl.startswith(pace_date):
-                _pace_idx = idx
-                break
-        if _pace_idx is not None:
-            _pace_line_y = ys[_pace_idx]
-            _pace_y = pace_value if pace_value is not None else _pace_line_y
-            _annotations.append((_pace_idx, _pace_line_y, _pace_y, ORANGE, f"Pace (today)  ·  {_fmt_val(_pace_y)}"))
-
-    def _find_baseline_idx(baseline_dt):
+    def _find_idx(date_str):
+        if not date_str:
+            return None
         search_xs_b = all_xs if (group_col and group_col in data[0]) else xs
-        b_idx = None
         for idx, lbl in enumerate(search_xs_b):
-            if lbl.startswith(baseline_dt):
-                b_idx = idx
-                break
-        if b_idx is None and search_xs_b:
-            import datetime as _dt
+            if lbl.startswith(date_str):
+                return idx
+        # Fuzzy fallback — closest within 2 days
+        import datetime as _dt
+        try:
+            target = _dt.date.fromisoformat(date_str)
+        except ValueError:
+            return None
+        best_idx, best_delta = None, None
+        for idx, lbl in enumerate(search_xs_b):
             try:
-                target = _dt.date.fromisoformat(baseline_dt)
-                best_idx, best_delta = None, None
-                for idx, lbl in enumerate(search_xs_b):
-                    try:
-                        d = _dt.date.fromisoformat(lbl[:10])
-                        delta = abs((d - target).days)
-                        if best_delta is None or delta < best_delta:
-                            best_idx, best_delta = idx, delta
-                    except ValueError:
-                        continue
-                if best_delta is not None and best_delta <= 2:
-                    b_idx = best_idx
+                d = _dt.date.fromisoformat(lbl[:10])
             except ValueError:
-                pass
-        return b_idx
+                continue
+            delta = abs((d - target).days)
+            if best_delta is None or delta < best_delta:
+                best_idx, best_delta = idx, delta
+        return best_idx if (best_delta is not None and best_delta <= 2) else None
 
-    def _pct_change_label(prefix, current_val, baseline_val):
-        """Build label like 'WoW ▼ 26.5%  (18 → 1)' showing change."""
-        if current_val is None or baseline_val is None or baseline_val == 0:
-            return f"{prefix}  ·  {_fmt_val(baseline_val or 0)}"
-        pct = ((current_val - baseline_val) / abs(baseline_val)) * 100
-        arrow = "▲" if pct > 0 else "▼"
-        return f"{prefix}  {arrow} {abs(pct):.1f}%  ({_fmt_pair(baseline_val, current_val)})"
-
-    # baseline_date = WoW/Pace baseline (same day last week) - YELLOW
-    _wow_baseline_idx = None
-    _wow_baseline_y = None
-    if baseline_date and chart_type == "line" and ys is not None:
-        b_idx = _find_baseline_idx(baseline_date)
-        if b_idx is not None:
-            _wow_baseline_idx = b_idx
-            _wow_baseline_line_y = ys[b_idx]
-            _wow_baseline_y = baseline_value if baseline_value is not None else _wow_baseline_line_y
-            # Label based on context:
-            # - WoW (or combined WoW+Pace): red anomaly dot exists → use "WoW" with yesterday's value
-            # - Pace-only: no red anomaly dot → use "Pace baseline" with today's pace value
-            if _anomaly_y is not None:
-                _baseline_pill_label = _pct_change_label("WoW", _anomaly_y, _wow_baseline_y)
-            elif _pace_y is not None:
-                _baseline_pill_label = _pct_change_label("Pace baseline", _pace_y, _wow_baseline_y)
-            else:
-                _baseline_pill_label = f"Last week  ·  {_fmt_val(_wow_baseline_y)}"
-            _annotations.append((b_idx, _wow_baseline_line_y, _wow_baseline_y, YELLOW, _baseline_pill_label))
-
-    # baseline_date_2 = DoD baseline (day before yesterday) - GREEN
-    _dod_baseline_idx = None
-    _dod_baseline_y = None
-    if baseline_date_2 and chart_type == "line" and ys is not None:
-        b_idx = _find_baseline_idx(baseline_date_2)
-        if b_idx is not None:
-            _dod_baseline_idx = b_idx
-            _dod_baseline_line_y = ys[b_idx]
-            _dod_baseline_y = baseline_value_2 if baseline_value_2 is not None else _dod_baseline_line_y
-            _annotations.append((b_idx, _dod_baseline_line_y, _dod_baseline_y, GREEN, _pct_change_label("DoD", _anomaly_y, _dod_baseline_y)))
-
-    # ── Build comparison pairs for connecting lines ───────────────────────
-    # Uses line_y (Steep position) for visual arrows so they connect to the dots
-    _comparison_pairs = []
+    # Resolve the primary (current, baseline) pair.
     if chart_type == "line" and ys is not None:
-        _anomaly_idx_for_pairs = None
-        _anomaly_line_y_for_pairs = None
-        if anomaly_date:
-            search_xs = all_xs if (group_col and group_col in data[0]) else xs
-            for idx, lbl in enumerate(search_xs):
-                if lbl.startswith(anomaly_date):
-                    _anomaly_idx_for_pairs = idx
-                    _anomaly_line_y_for_pairs = ys[idx]
-                    break
-        if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            # Use BQ ground-truth values for pct calculation — Steep line may be 0 for that date
-            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, YELLOW, "WoW"))
-        if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            _comparison_pairs.append((_dod_baseline_idx, _dod_baseline_y or ys[_dod_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, GREEN, "DoD"))
-        if _wow_baseline_idx is not None and _pace_idx is not None:
-            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _pace_idx, _pace_y or ys[_pace_idx], ORANGE, "Pace"))
+        BASELINE_DOT = "#94a3b8"  # slate-400, deliberately muted
+        CURRENT_DROP = "#dc2626"  # red-600 — used for negative delta
+        CURRENT_RISE = "#16a34a"  # green-600 — used for positive delta
+        CONNECTOR    = "#cbd5e1"  # slate-300 — barely-there reference line
 
-    # ── Draw comparison arrows between baseline → anomaly/pace points ─────
-    # Each pair is (from_idx, from_y, to_idx, to_y, color, label).
-    # A curved arc connects the two dots so it never overlaps the line itself.
-    for _cp_from_idx, _cp_from_y, _cp_to_idx, _cp_to_y, _cp_color, _cp_label in _comparison_pairs:
-        if _cp_from_y is None or _cp_to_y is None:
-            continue
-        # Resolve zero-valued line positions to the BQ ground-truth value
-        _arrow_from_y = _cp_from_y if _cp_from_y != 0 else _cp_to_y
-        _arrow_to_y   = _cp_to_y   if _cp_to_y   != 0 else _cp_from_y
-        # arc bends upward when the arrow travels forward in time
-        _rad = 0.25 if _cp_to_idx > _cp_from_idx else -0.25
-        ax.annotate(
-            "",
-            xy=(_cp_to_idx, _arrow_to_y),
-            xytext=(_cp_from_idx, _arrow_from_y),
-            arrowprops=dict(
-                arrowstyle="-|>",
-                color=_cp_color,
-                lw=1.6,
-                alpha=0.85,
-                connectionstyle=f"arc3,rad={_rad}",
-            ),
-            zorder=8,
-        )
+        # Priority: WoW > DoD > Pace
+        cur_idx = _find_idx(anomaly_date) if anomaly_date else None
+        cur_val = anomaly_value if cur_idx is not None else None
+        base_idx = _find_idx(baseline_date) if (cur_idx is not None and baseline_date) else None
+        base_val = baseline_value if base_idx is not None else None
+        comp_label = "WoW" if (cur_idx is not None and base_idx is not None) else None
 
-    # ── Draw annotations ───────────────────────────────────────────────
-    if _annotations and ys:
-        n_pts = len(xs) if xs else 1
+        if comp_label is None and cur_idx is not None and baseline_date_2:
+            base_idx = _find_idx(baseline_date_2)
+            base_val = baseline_value_2 if base_idx is not None else None
+            comp_label = "DoD" if base_idx is not None else None
 
-        def _resolve_dot_y(line_y, label_y):
-            if line_y is None or line_y == 0:
-                return label_y if label_y is not None else 0
-            return line_y
+        if comp_label is None and pace_date:
+            cur_idx = _find_idx(pace_date)
+            cur_val = pace_value if cur_idx is not None else None
+            if cur_idx is not None and baseline_date:
+                base_idx = _find_idx(baseline_date)
+                base_val = baseline_value if base_idx is not None else None
+                comp_label = "Pace" if base_idx is not None else None
 
-        # Give top of chart a bit of breathing room for the badges.
+        # Fall back to ground-truth values (BQ) when the line value is 0 or
+        # missing — the line may not have caught up yet but the alert did.
+        def _resolve_y(idx, fallback):
+            if idx is None:
+                return None
+            line_y = ys[idx]
+            if (fallback is not None) and (line_y == 0 or line_y is None):
+                return fallback
+            return fallback if fallback is not None else line_y
+
+        cur_y  = _resolve_y(cur_idx, cur_val)
+        base_y = _resolve_y(base_idx, base_val)
+
+        # Give some headroom so the corner badge has room.
         y_bottom, y_top = ax.get_ylim()
-        ax.set_ylim(bottom=y_bottom, top=y_top + (y_top - y_bottom) * 0.18)
+        ax.set_ylim(bottom=y_bottom, top=y_top + (y_top - y_bottom) * 0.22)
 
-        # ── Dots at key dates with soft glow halo + value label ──────
-        import matplotlib.patheffects as _pe
-        _ylim_bottom, _ylim_top = ax.get_ylim()
-        _y_span = _ylim_top - _ylim_bottom
-        for a_idx, a_line_y, a_label_y, a_color, _text in _annotations:
-            dot_y = _resolve_dot_y(a_line_y, a_label_y)
-            # Soft glow (large transparent halo)
-            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=22,
-                    zorder=5, alpha=0.18)
-            # Background halo (cuts the line for clean dot edge)
-            ax.plot(a_idx, dot_y, "o", color=BG, markersize=13, zorder=6)
-            # Filled coloured dot with white edge
-            ax.plot(a_idx, dot_y, "o", color=a_color, markersize=8,
-                    zorder=7, markeredgecolor="#ffffff", markeredgewidth=1.4)
-            # Value label above dot — Steep-style: tight, clean, readable
-            _label_offset = _y_span * 0.05
-            _label_y_pos = dot_y + _label_offset
-            _va = "bottom"
-            # If too close to top, place below the dot instead
-            if _label_y_pos > _ylim_top - _y_span * 0.05:
-                _label_y_pos = dot_y - _label_offset
-                _va = "top"
-            ax.text(a_idx, _label_y_pos, _fmt_val(dot_y),
-                    ha="center", va=_va, fontsize=9.5,
-                    color=a_color, fontweight="700", zorder=8,
-                    path_effects=[_pe.withStroke(linewidth=3.5, foreground=BG)])
-
-        # ── Summary badges (top-right) — single source of truth ──────────
-        summary = []  # (label, arrow, pct, base, current, color)
-        if _wow_baseline_y is not None and _anomaly_y is not None and _wow_baseline_y != 0:
-            pct = ((_anomaly_y - _wow_baseline_y) / abs(_wow_baseline_y)) * 100
-            summary.append(("WoW", "▼" if pct < 0 else "▲", abs(pct),
-                            _wow_baseline_y, _anomaly_y, YELLOW))
-        if _dod_baseline_y is not None and _anomaly_y is not None and _dod_baseline_y != 0:
-            pct = ((_anomaly_y - _dod_baseline_y) / abs(_dod_baseline_y)) * 100
-            summary.append(("DoD", "▼" if pct < 0 else "▲", abs(pct),
-                            _dod_baseline_y, _anomaly_y, GREEN))
-        if _wow_baseline_y is not None and _pace_y is not None and _wow_baseline_y != 0:
-            pct = ((_pace_y - _wow_baseline_y) / abs(_wow_baseline_y)) * 100
-            summary.append(("Pace", "▼" if pct < 0 else "▲", abs(pct),
-                            _wow_baseline_y, _pace_y, ORANGE))
-
-        for i, (lbl, arrow, pct, base_v, cur_v, b_color) in enumerate(summary):
-            text = f"{lbl}  {arrow} {pct:.1f}%   {_fmt_val(base_v)} → {_fmt_val(cur_v)}"
-            ax.text(
-                0.99, 0.97 - i * 0.085, text,
-                transform=ax.transAxes,
-                ha="right", va="top",
-                fontsize=10, color=b_color, fontweight="700",
-                bbox=dict(boxstyle="round,pad=0.55", facecolor=SURFACE,
-                          edgecolor=b_color, alpha=0.97, linewidth=1.2),
-                zorder=9,
+        if cur_idx is not None and base_idx is not None and cur_y is not None and base_y is not None:
+            # Compute delta colour from the change direction.
+            if base_y == 0:
+                pct = None
+            else:
+                pct = ((cur_y - base_y) / abs(base_y)) * 100
+            delta_color = (
+                CURRENT_DROP if (pct is None or pct < 0) else CURRENT_RISE
             )
 
-    # ── Classification badge (top-left, under title) ──────────────────────
-    # When statistical context is provided, show whether today's value is
-    # within the historical normal range. This is the single most important
-    # signal for volatile metrics like ratios with low volume.
-    if today_classification and today_label:
-        _badge_color = {
-            "typical":  "#34d399",  # emerald — within IQR (P25–P75)
-            "elevated": "#fbbf24",  # amber — between P75 and Tukey fence
-            "outlier":  "#fb7185",  # rose — beyond Tukey fence (true outlier)
-        }.get(today_classification, "#94a3b8")
-        _badge_text = {
-            "typical":  f"● Typical · {today_label}",
-            "elevated": f"● Elevated · {today_label}",
-            "outlier":  f"● Outlier · {today_label}",
-        }.get(today_classification, today_label)
-        ax.text(
-            0.01, 0.97, _badge_text,
-            transform=ax.transAxes,
-            ha="left", va="top",
-            fontsize=10, color=_badge_color, fontweight="700",
-            bbox=dict(boxstyle="round,pad=0.55", facecolor=SURFACE,
-                      edgecolor=_badge_color, alpha=0.97, linewidth=1.2),
-            zorder=10,
-        )
+            # Thin connector behind the dots — soft, just enough to read as a pair.
+            ax.plot(
+                [base_idx, cur_idx], [base_y, cur_y],
+                color=CONNECTOR, linewidth=1.2, alpha=0.55,
+                linestyle=(0, (3, 3)), zorder=3, solid_capstyle="round",
+            )
 
-    # ── Anomaly ring — drawn last so it sits on top of everything ─────────
-    # Uses the resolved anomaly_date / pace_date index so the ring is always
-    # on the exact date that triggered the alert — not on a historical spike
-    # and not blindly on the last point.
-    if (
-        chart_type == "line"
-        and ys is not None
-        and tukey_low is not None
-        and tukey_high is not None
-        and today_classification in ("outlier", "elevated")
-    ):
-        # Priority: reported anomaly date → pace date → last data point
-        _ring_idx = None
-        _ring_xs = all_xs if (group_col and group_col in data[0]) else xs
-        if anomaly_date:
-            for _ri, _rl in enumerate(_ring_xs):
-                if _rl.startswith(anomaly_date):
-                    _ring_idx = _ri
-                    break
-        if _ring_idx is None and pace_date:
-            for _ri, _rl in enumerate(_ring_xs):
-                if _rl.startswith(pace_date):
-                    _ring_idx = _ri
-                    break
-        if _ring_idx is None:
-            _ring_idx = len(ys) - 1
+            # Baseline dot (muted, smaller).
+            ax.plot(base_idx, base_y, "o",
+                    color=BASELINE_DOT, markersize=8, zorder=6,
+                    markeredgecolor=BG, markeredgewidth=2)
 
-        _ring_y = ys[_ring_idx]
-        _ring_color = RED if today_classification == "outlier" else YELLOW
-        ax.plot(
-            _ring_idx, _ring_y, "o", markerfacecolor="none",
-            markeredgecolor=_ring_color, markeredgewidth=1.8,
-            markersize=14, zorder=11,
-        )
+            # Current dot (prominent).
+            # Soft halo, lighter than the dark theme so it doesn't smudge on white.
+            ax.plot(cur_idx, cur_y, "o",
+                    color=delta_color, markersize=20, alpha=0.12, zorder=5)
+            ax.plot(cur_idx, cur_y, "o",
+                    color=delta_color, markersize=10, zorder=7,
+                    markeredgecolor=BG, markeredgewidth=2.5)
+
+            # Direct value labels next to each dot.
+            import matplotlib.patheffects as _pe
+            _ylim_b, _ylim_t = ax.get_ylim()
+            _span = _ylim_t - _ylim_b
+            _offset = _span * 0.045
+
+            for _ix, _iy, _color, _val in (
+                (base_idx, base_y, BASELINE_DOT, base_y),
+                (cur_idx,  cur_y,  delta_color,  cur_y),
+            ):
+                _ly = _iy + _offset
+                _va = "bottom"
+                if _ly > _ylim_t - _span * 0.05:
+                    _ly = _iy - _offset
+                    _va = "top"
+                ax.text(_ix, _ly, _fmt_val(_val),
+                        ha="center", va=_va, fontsize=10,
+                        color=_color, fontweight="700", zorder=8,
+                        path_effects=[_pe.withStroke(linewidth=3.5, foreground=BG)])
+
+            # Big delta in the top-right — the headline number.
+            if pct is not None:
+                arrow = "▼" if pct < 0 else "▲"
+                ax.text(
+                    0.985, 0.965, f"{arrow} {abs(pct):.1f}%",
+                    transform=ax.transAxes,
+                    ha="right", va="top",
+                    fontsize=20, color=delta_color, fontweight="800",
+                    zorder=10,
+                )
+                ax.text(
+                    0.985, 0.885,
+                    f"{_fmt_val(base_y)} → {_fmt_val(cur_y)}   ·   {comp_label}",
+                    transform=ax.transAxes,
+                    ha="right", va="top",
+                    fontsize=10, color=TEXT_DIM, fontweight="600",
+                    zorder=10,
+                )
 
     # ── Title (left-aligned, clean) ───────────────────────────────────────
     ax.set_title(title, fontsize=14, fontweight="700", color=TEXT, loc="left", pad=16)
