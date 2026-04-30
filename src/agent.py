@@ -514,6 +514,123 @@ def _plot_results(
         sa, sb = _fmt_val(a), _fmt_val(b)
         return f"{sa} → {sb}"
 
+    # ── Minimal comparison overlay ──────────────────────────────────────────
+    # Two dots (baseline → current) + one big delta number in the corner.
+    # Priority: WoW > DoD > Pace. Everything else is ignored.
+    def _find_idx(date_str):
+        if not date_str:
+            return None
+        _sx = all_xs if (group_col and group_col in data[0]) else xs
+        for _i, _lbl in enumerate(_sx):
+            if _lbl.startswith(date_str):
+                return _i
+        # Fuzzy: closest date within 2 days
+        import datetime as _dt
+        try:
+            _target = _dt.date.fromisoformat(date_str)
+        except ValueError:
+            return None
+        _best_i, _best_d = None, None
+        for _i, _lbl in enumerate(_sx):
+            try:
+                _d = _dt.date.fromisoformat(_lbl[:10])
+            except ValueError:
+                continue
+            _delta = abs((_d - _target).days)
+            if _best_d is None or _delta < _best_d:
+                _best_i, _best_d = _i, _delta
+        return _best_i if (_best_d is not None and _best_d <= 2) else None
+
+    if chart_type == "line" and ys is not None:
+        # Dot colours
+        _DOT_BASE    = "#94a3b8"  # slate-400 — muted baseline
+        _DOT_DOWN    = "#dc2626"  # red-600   — negative delta
+        _DOT_UP      = "#16a34a"  # green-600 — positive delta
+        _CONNECTOR   = "#cbd5e1"  # slate-300 — thin dashed bridge
+
+        # Resolve primary comparison (WoW first, then DoD, then Pace)
+        _cur_idx  = _find_idx(anomaly_date) if anomaly_date else None
+        _cur_val  = anomaly_value if _cur_idx is not None else None
+        _base_idx = _find_idx(baseline_date) if (_cur_idx is not None and baseline_date) else None
+        _base_val = baseline_value if _base_idx is not None else None
+        _comp_lbl = "WoW" if (_cur_idx is not None and _base_idx is not None) else None
+
+        if _comp_lbl is None and _cur_idx is not None and baseline_date_2:
+            _base_idx = _find_idx(baseline_date_2)
+            _base_val = baseline_value_2 if _base_idx is not None else None
+            _comp_lbl = "DoD" if _base_idx is not None else None
+
+        if _comp_lbl is None and pace_date:
+            _cur_idx  = _find_idx(pace_date)
+            _cur_val  = pace_value if _cur_idx is not None else None
+            if _cur_idx is not None and baseline_date:
+                _base_idx = _find_idx(baseline_date)
+                _base_val = baseline_value if _base_idx is not None else None
+                _comp_lbl = "Pace" if _base_idx is not None else None
+
+        def _resolve_y(idx, fallback):
+            if idx is None:
+                return None
+            _ly = ys[idx]
+            return fallback if (fallback is not None and (_ly == 0 or _ly is None)) else (fallback if fallback is not None else _ly)
+
+        _cur_y  = _resolve_y(_cur_idx,  _cur_val)
+        _base_y = _resolve_y(_base_idx, _base_val)
+
+        if _cur_idx is not None and _base_idx is not None and _cur_y is not None and _base_y is not None:
+            # Expand top so corner badge has breathing room
+            _yb, _yt = ax.get_ylim()
+            ax.set_ylim(bottom=_yb, top=_yt + (_yt - _yb) * 0.22)
+            _yb, _yt = ax.get_ylim()
+            _span = _yt - _yb
+
+            _pct = ((_cur_y - _base_y) / abs(_base_y) * 100) if _base_y != 0 else None
+            _dot_color = _DOT_DOWN if (_pct is None or _pct < 0) else _DOT_UP
+
+            # Thin dashed connector
+            ax.plot(
+                [_base_idx, _cur_idx], [_base_y, _cur_y],
+                color=_CONNECTOR, linewidth=1.2, alpha=0.7,
+                linestyle=(0, (4, 3)), zorder=3, solid_capstyle="round",
+            )
+
+            # Baseline dot — small, muted
+            ax.plot(_base_idx, _base_y, "o",
+                    color=_DOT_BASE, markersize=9, zorder=6,
+                    markeredgecolor="#ffffff", markeredgewidth=2.5)
+
+            # Current dot — prominent with soft halo
+            ax.plot(_cur_idx, _cur_y, "o",
+                    color=_dot_color, markersize=20, alpha=0.12, zorder=5)
+            ax.plot(_cur_idx, _cur_y, "o",
+                    color=_dot_color, markersize=10, zorder=7,
+                    markeredgecolor="#ffffff", markeredgewidth=2.5)
+
+            # Value labels next to each dot
+            import matplotlib.patheffects as _pe
+            _offset = _span * 0.045
+            for _ix, _iy, _color in ((_base_idx, _base_y, _DOT_BASE), (_cur_idx, _cur_y, _dot_color)):
+                _ly_pos = _iy + _offset
+                _va = "bottom"
+                if _ly_pos > _yt - _span * 0.05:
+                    _ly_pos = _iy - _offset
+                    _va = "top"
+                ax.text(_ix, _ly_pos, _fmt_val(_iy),
+                        ha="center", va=_va, fontsize=10,
+                        color=_color, fontweight="700", zorder=8,
+                        path_effects=[_pe.withStroke(linewidth=3.5, foreground="#ffffff")])
+
+            # Big delta in top-right corner
+            if _pct is not None:
+                _arrow = "▼" if _pct < 0 else "▲"
+                ax.text(0.985, 0.965, f"{_arrow} {abs(_pct):.1f}%",
+                        transform=ax.transAxes, ha="right", va="top",
+                        fontsize=20, color=_dot_color, fontweight="800", zorder=10)
+                ax.text(0.985, 0.885,
+                        f"{_fmt_val(_base_y)} → {_fmt_val(_cur_y)}   ·   {_comp_lbl}",
+                        transform=ax.transAxes, ha="right", va="top",
+                        fontsize=10, color=TEXT_DIM, fontweight="600", zorder=10)
+
     # ── Title (left-aligned, clean) ───────────────────────────────────────
     ax.set_title(title, fontsize=14, fontweight="700", color=TEXT, loc="left", pad=16)
     ax.set_xlabel("")
