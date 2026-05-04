@@ -1218,16 +1218,29 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                     logger.warning("Correlation fetch failed: %s", e)
                     return "None"
 
+            def _fetch_jira_tickets():
+                try:
+                    _ref_dt = datetime.strptime(reference_date, "%Y-%m-%d").date()
+                    tickets = jira_client.search_related_tickets(
+                        metric_info["metric_label"], _ref_dt
+                    )
+                    return jira_client.format_ticket_context(tickets) or "None"
+                except Exception as e:
+                    logger.warning("Jira ticket search failed: %s", e)
+                    return "None"
+
             _step = "fetch data (BQ/Steep/Jira)"
-            with _TPE(max_workers=4) as pre_exec:
+            with _TPE(max_workers=5) as pre_exec:
                 steep_future = pre_exec.submit(_fetch_steep)
                 jira_future = pre_exec.submit(_fetch_jira)
                 notes_future = pre_exec.submit(_fetch_notes)
                 corr_future  = pre_exec.submit(_fetch_correlations)
+                tickets_future = pre_exec.submit(_fetch_jira_tickets)
                 steep_data = steep_future.result()
                 jira_context = jira_future.result()
                 context_notes = notes_future.result()
                 correlated_metrics = corr_future.result()
+                jira_tickets = tickets_future.result()
 
             import json as _json
             steep_json = _json.dumps(steep_data)
@@ -1441,6 +1454,7 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 f"{steep_json}\n\n"
                 f"## Game milestones:\n{_get_setting('game_milestones', Config.GAME_MILESTONES)}\n\n"
                 f"## Jira releases near {reference_date}:\n{jira_context}\n\n"
+                f"## Jira tickets related to this metric (created/updated ±3 days):\n{jira_tickets}\n\n"
                 f"## Team context notes:\n{context_notes}\n\n"
                 f"## Correlated metrics (same direction, same day):\n{correlated_metrics}\n\n"
                 "## Output format\n"
@@ -1452,9 +1466,10 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
                 "exact raw values, and % change for each triggered comparison (e.g. '...down **-25.0% WoW** (24 → 18) and **-18.2% DoD** (22 → 18) on Apr 27').>\n\n"
                 "**🔍 Likely cause**\n"
                 "<One sentence: name the most probable cause explicitly — beta end, release, known event, or data pattern. "
-                "Cross-reference milestones, Jira releases, and team notes. No hedging like 'could be many things'.>\n\n"
+                "Cross-reference milestones, Jira releases, Jira tickets, and team notes. No hedging like 'could be many things'.>\n\n"
                 "**🔗 Supporting signals**\n"
-                "<If correlated metrics exist: list them as bullets (• Metric: ▲/▼ X%) and state whether this confirms a systemic or isolated issue. "
+                "<List supporting evidence as bullets: correlated metrics (• Metric: ▲/▼ X%), "
+                "related Jira tickets (• TICKET-123: summary), or releases. "
                 "If none: write '• No other metrics moved significantly — likely isolated to this metric.'>\n\n"
                 "**📈 Trend**\n"
                 "<One sentence: overall data shape since baseline — include the peak value and date, "
