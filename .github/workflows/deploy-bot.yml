@@ -69,4 +69,4 @@ jobs:
             --project=${{ env.PROJECT_ID }} \
             --region=${{ env.REGION }} \
             --format="value(status.url)")
-          echo "Deployed to: $URL"
+          echo "Deployed to: $URL" 
