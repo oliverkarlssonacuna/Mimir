@@ -132,7 +132,7 @@ def search_related_tickets(metric_label: str, anomaly_date: date, max_results: i
         f"ORDER BY created DESC"
     )
 
-    url = f"{Config.JIRA_BASE_URL.rstrip('/')}/rest/api/3/search"
+    url = f"{Config.JIRA_BASE_URL.rstrip('/')}/rest/api/3/search/jql"
     params = {
         "jql": jql,
         "maxResults": max_results,
