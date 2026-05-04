@@ -305,6 +305,7 @@ class Detector:
 
         # ── Fallback: metrics missing today's snapshot ───────────────────────
         missing_ids = [m["metric_id"] for m in self._metric_configs if m["metric_id"] not in today_values]
+        days_without_data: dict[str, float] = {}
         if missing_ids:
             # Find latest snapshot date per missing metric
             missing_list = ", ".join(f"'{mid}'" for mid in missing_ids)
@@ -320,6 +321,16 @@ class Detector:
             except Exception as e:
                 logger.warning("check_only fallback query failed: %s", e)
                 latest_dates = {}
+            # Compute days since last snapshot for each missing metric
+            for _mid in missing_ids:
+                _ld = latest_dates.get(_mid)
+                if _ld is not None:
+                    if isinstance(_ld, str):
+                        _ld = datetime.strptime(_ld, "%Y-%m-%d").date()
+                    _ldt = datetime.combine(_ld, datetime.min.time()).replace(tzinfo=timezone.utc)
+                    days_without_data[_mid] = (now - _ldt).total_seconds() / 86400
+                else:
+                    days_without_data[_mid] = 999  # no snapshot ever
 
             stale_threshold_hours = 5
             for mid in missing_ids:
@@ -379,7 +390,11 @@ class Detector:
             current_value = today_values.get(metric_id)
             if current_value is None:
                 logger.info("%s: no BQ snapshot for today, skipping.", label)
-                failed_labels.append((label, "No snapshot"))
+                days_missing = days_without_data.get(metric_id, 0)
+                if days_missing >= 3:
+                    failed_labels.append((label, f"No snapshot ({int(days_missing)}+ days)"))
+                else:
+                    failed_labels.append((label, "No snapshot"))
                 if progress_callback:
                     progress_callback(i + 1, total, label)
                 continue

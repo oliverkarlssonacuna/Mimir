@@ -58,6 +58,9 @@ _alerted_keys: set[tuple[str, str, str]] = set()
 # (monitor_id, value, date_str) already alerted this session
 _alerted_field_keys: set[tuple[str, str, str]] = set()
 
+# (metric_label, date_str) already sent a fetch-error alert today
+_alerted_error_keys: set[tuple[str, str]] = set()
+
 # Guard against on_ready firing multiple times on reconnect
 _bot_initialized: bool = False
 
@@ -593,24 +596,44 @@ async def monitor_loop():
     checked_count = total_metrics - unique_failed
 
     if failed_labels:
-        now_cest = datetime.utcnow() + timedelta(hours=2)
+        today_str_err = datetime.utcnow().strftime("%Y-%m-%d")
         # Deduplicate by metric label — keep only the first (root cause) error per metric
         seen: dict[str, str] = {}
         for lbl, err in failed_labels:
             if lbl not in seen:
                 seen[lbl] = err
-        unique_count = len(seen)
-        embed = discord.Embed(
-            title="⚠️ Mimir – fetch errors",
-            color=discord.Color.orange(),
-            timestamp=datetime.utcnow(),
-        )
-        embed.add_field(name="Time (CEST)", value=now_cest.strftime("%Y-%m-%d %H:%M"), inline=True)
-        embed.add_field(name="Coverage", value=f"`{checked_count}/{total_metrics}` metrics checked", inline=True)
-        lines = [f"• `{lbl}` — {err}" for lbl, err in seen.items()]
-        embed.add_field(name=f"Failed metrics ({unique_count})", value="\n".join(lines), inline=False)
-        embed.set_footer(text="Mimir — Error Monitor")
-        await error_channel.send(embed=embed)
+        # Only report metrics that haven't been alerted today
+        new_errors = {lbl: err for lbl, err in seen.items() if (lbl, today_str_err) not in _alerted_error_keys}
+        if new_errors:
+            for lbl in new_errors:
+                _alerted_error_keys.add((lbl, today_str_err))
+            now_cest = datetime.utcnow() + timedelta(hours=2)
+            unique_count = len(new_errors)
+            embed = discord.Embed(
+                title="⚠️ Mimir – fetch errors",
+                color=discord.Color.orange(),
+                timestamp=datetime.utcnow(),
+            )
+            embed.add_field(name="Time (CEST)", value=now_cest.strftime("%Y-%m-%d %H:%M"), inline=True)
+            embed.add_field(name="Coverage", value=f"`{checked_count}/{total_metrics}` metrics checked", inline=True)
+            lines = [f"• `{lbl}` — {err}" for lbl, err in new_errors.items()]
+            embed.add_field(name=f"Failed metrics ({unique_count})", value="\n".join(lines), inline=False)
+            embed.set_footer(text="Mimir — Error Monitor")
+            await error_channel.send(embed=embed)
+
+            # Escalate metrics that have been missing 3+ days
+            stale_metrics = [(lbl, err) for lbl, err in new_errors.items() if "days)" in err]
+            if stale_metrics:
+                esc_embed = discord.Embed(
+                    title="🔕 Mimir – metrics inactive 3+ days",
+                    description="These metrics have had no data for 3 or more days. Consider disabling them in the metric config to reduce noise.",
+                    color=discord.Color.dark_orange(),
+                    timestamp=datetime.utcnow(),
+                )
+                esc_lines = [f"• `{lbl}` — {err}" for lbl, err in stale_metrics]
+                esc_embed.add_field(name="Metrics to review", value="\n".join(esc_lines), inline=False)
+                esc_embed.set_footer(text="Mimir — Error Monitor")
+                await error_channel.send(embed=esc_embed)
 
     # ── Field value monitor checks (once per day at configured hour) ──────
     field_check_hour = _safe_int_setting("field_monitor_check_hour", 8, min_val=0, max_val=23)
