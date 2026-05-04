@@ -60,8 +60,8 @@ jobs:
             --port=8081 \
             --min-instances=1 \
             --max-instances=1 \
-            --set-secrets="DISCORD_BOT_TOKEN=mimir-discord-bot-token:latest,DISCORD_ALERT_CHANNEL_ID=mimir-discord-alert-channel-id:latest,STEEP_API_TOKEN=mimir-steep-api-token:latest,DISCORD_ERROR_CHANNEL_ID=mimir-discord-error-channel-id:latest,GITHUB_PAT=mimir-github-pat:latest" \
-            --set-env-vars="GCP_PROJECT_ID=${{ env.PROJECT_ID }},ADMIN_URL=https://mimir-web-xhk35fyqfq-ez.a.run.app,BOT_INTERNAL_PORT=8081,GCP_VERTEXAI_REGION=us-central1,GITHUB_ORG=goalsgame"
+            --set-secrets="DISCORD_BOT_TOKEN=mimir-discord-bot-token:latest,DISCORD_ALERT_CHANNEL_ID=mimir-discord-alert-channel-id:latest,STEEP_API_TOKEN=mimir-steep-api-token:latest,DISCORD_ERROR_CHANNEL_ID=mimir-discord-error-channel-id:latest,GITHUB_PAT=mimir-github-pat:latest,JIRA_API_TOKEN=mimir-jira-api-token:latest" \
+            --set-env-vars="GCP_PROJECT_ID=${{ env.PROJECT_ID }},ADMIN_URL=https://mimir-web-xhk35fyqfq-ez.a.run.app,BOT_INTERNAL_PORT=8081,GCP_VERTEXAI_REGION=us-central1,GITHUB_ORG=goalsgame,JIRA_BASE_URL=https://goalsgame.atlassian.net,JIRA_EMAIL=oliver@playgoals.com,JIRA_PROJECT_KEY=GG"
 
       - name: Print service URL
         run: |
