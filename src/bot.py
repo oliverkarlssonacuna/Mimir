@@ -561,13 +561,15 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
             pr_lines = []
             for pr in prs[:8]:
                 repo = pr["repo"]
-                title = pr["title"]
+                # Truncate long titles so the field stays within Discord's 1024 char limit
+                title = pr["title"][:60] + "…" if len(pr["title"]) > 60 else pr["title"]
                 author = pr["author"]
                 url = pr["url"]
                 pr_lines.append(f"• [`{repo}`] [{title}]({url}) — @{author}")
+            field_value = "\n".join(pr_lines)[:1020]  # hard cap at 1020 chars
             embed.add_field(
                 name=f"🔀 Merged PRs around {anomalies[0].reference_date} ({len(prs)})",
-                value="\n".join(pr_lines),
+                value=field_value,
                 inline=False,
             )
     except Exception as e:
