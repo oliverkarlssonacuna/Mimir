@@ -376,20 +376,20 @@ def _plot_results(
 
     highlighted = {v.strip() for v in highlight_values.split(",") if v.strip()} if highlight_values else set()
 
-    # ── Mimir color palette ─────────────────────────────────────────────
-    BG = "#0b0d11"
-    SURFACE = "#111318"
-    BORDER = "#1e2028"
-    GRID = "#1a1c24"
-    TEXT = "#f1f5f9"
-    TEXT_MUTED = "#cbd5e1"
-    TEXT_DIM = "#94a3b8"
-    ACCENT = "#818cf8"       # indigo-400 — primary line
-    ACCENT_GLOW = "#6366f1"  # indigo-500 — fill
-    RED = "#fb7185"          # rose-400 — anomaly
-    YELLOW = "#fbbf24"       # amber-400 — WoW baseline
-    GREEN = "#34d399"        # emerald-400 — DoD baseline
-    ACCENT_COLORS = [ACCENT, RED, GREEN, YELLOW, "#f472b6", "#22d3ee"]
+    # ── Mimir color palette (light theme) ───────────────────────────────
+    BG = "#ffffff"
+    SURFACE = "#ffffff"
+    BORDER = "#e2e8f0"
+    GRID = "#e2e8f0"
+    TEXT = "#0f172a"
+    TEXT_MUTED = "#475569"
+    TEXT_DIM = "#64748b"
+    ACCENT = "#1e293b"       # near-black — primary line
+    ACCENT_GLOW = "#334155"  # slate-700 — fill
+    RED = "#e11d48"          # rose-600 — anomaly
+    YELLOW = "#d97706"       # amber-600 — WoW baseline
+    GREEN = "#059669"        # emerald-600 — DoD baseline
+    ACCENT_COLORS = [ACCENT, RED, GREEN, YELLOW, "#7c3aed", "#0284c7"]
 
     # ── Figure setup ──────────────────────────────────────────────────────
     fig, ax = plt.subplots(figsize=(14, 6.5))
@@ -534,7 +534,7 @@ def _plot_results(
             _annotations.append((anomaly_idx, _anomaly_line_y, _anomaly_y, RED, f"Anomaly  ·  {_fmt_val(_anomaly_y)}"))
 
     # pace_date = Pace current (today) - ORANGE
-    ORANGE = "#fb923c"  # orange-400
+    ORANGE = "#c2410c"  # orange-700 — pace (dark for light bg)
     _pace_idx = None
     if pace_date and chart_type == "line" and ys is not None:
         search_xs = all_xs if (group_col and group_col in data[0]) else xs
