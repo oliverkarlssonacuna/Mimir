@@ -69,6 +69,10 @@ class Config:
     JIRA_API_TOKEN: str = _optional("JIRA_API_TOKEN", "")
     JIRA_PROJECT_KEY: str = _optional("JIRA_PROJECT_KEY", "")
 
+    # GitHub integration for merged PR context in anomaly analysis
+    GITHUB_ORG: str = _optional("GITHUB_ORG", "")
+    GITHUB_PAT: str = _optional("GITHUB_PAT", "")
+
     # Steep integration
     STEEP_API_TOKEN: str = _require("STEEP_API_TOKEN")
 

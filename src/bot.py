@@ -27,6 +27,7 @@ from steep_client import SteepClient
 from detector import Detector, Anomaly, FieldAlert
 from agent import Agent, THREAD_SYSTEM_PROMPT
 import jira_client
+import github_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -549,6 +550,28 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
         embed.add_field(name="Analysis", value=analysis, inline=False)
     except Exception as e:
         logger.warning("Analysis summary failed: %s", e)
+
+    # GitHub merged PRs near the anomaly date
+    try:
+        ref_date_gh = datetime.strptime(anomalies[0].reference_date, "%Y-%m-%d").date()
+        prs = await loop.run_in_executor(
+            None, lambda: github_client.get_merged_prs_on_date(ref_date_gh)
+        )
+        if prs:
+            pr_lines = []
+            for pr in prs[:8]:
+                repo = pr["repo"]
+                title = pr["title"]
+                author = pr["author"]
+                url = pr["url"]
+                pr_lines.append(f"• [`{repo}`] [{title}]({url}) — @{author}")
+            embed.add_field(
+                name=f"🔀 Merged PRs around {anomalies[0].reference_date} ({len(prs)})",
+                value="\n".join(pr_lines),
+                inline=False,
+            )
+    except Exception as e:
+        logger.warning("GitHub PR fetch failed: %s", e)
 
     _pending_anomalies[anomalies[0].metric_id] = anomalies
     view = GroupedAnomalyView(anomalies[0].metric_id, anomalies[0].reference_date)
