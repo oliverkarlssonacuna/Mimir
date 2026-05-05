@@ -626,12 +626,12 @@ def _plot_results(
                     _anomaly_line_y_for_pairs = ys[idx]
                     break
         if _wow_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            # Use BQ ground-truth values for pct calculation — Steep line may be 0 for that date
-            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, YELLOW, "WoW"))
+            # Use Steep line values so arrows connect to visible dots; fall back to BQ value only when line is 0
+            _comparison_pairs.append((_wow_baseline_idx, ys[_wow_baseline_idx] or _wow_baseline_y, _anomaly_idx_for_pairs, _anomaly_line_y_for_pairs or _anomaly_y, YELLOW, "WoW"))
         if _dod_baseline_idx is not None and _anomaly_idx_for_pairs is not None:
-            _comparison_pairs.append((_dod_baseline_idx, _dod_baseline_y or ys[_dod_baseline_idx], _anomaly_idx_for_pairs, _anomaly_y or _anomaly_line_y_for_pairs, GREEN, "DoD"))
+            _comparison_pairs.append((_dod_baseline_idx, ys[_dod_baseline_idx] or _dod_baseline_y, _anomaly_idx_for_pairs, _anomaly_line_y_for_pairs or _anomaly_y, GREEN, "DoD"))
         if _wow_baseline_idx is not None and _pace_idx is not None:
-            _comparison_pairs.append((_wow_baseline_idx, _wow_baseline_y or ys[_wow_baseline_idx], _pace_idx, _pace_y or ys[_pace_idx], ORANGE, "Pace"))
+            _comparison_pairs.append((_wow_baseline_idx, ys[_wow_baseline_idx] or _wow_baseline_y, _pace_idx, ys[_pace_idx] or _pace_y, ORANGE, "Pace"))
 
     # ── Draw comparison arrows between baseline → anomaly/pace points ─────
     # Each pair is (from_idx, from_y, to_idx, to_y, color, label).
@@ -639,15 +639,12 @@ def _plot_results(
     for _cp_from_idx, _cp_from_y, _cp_to_idx, _cp_to_y, _cp_color, _cp_label in _comparison_pairs:
         if _cp_from_y is None or _cp_to_y is None:
             continue
-        # Resolve zero-valued line positions to the BQ ground-truth value
-        _arrow_from_y = _cp_from_y if _cp_from_y != 0 else _cp_to_y
-        _arrow_to_y   = _cp_to_y   if _cp_to_y   != 0 else _cp_from_y
-        # arc bends upward when the arrow travels forward in time
-        _rad = 0.25 if _cp_to_idx > _cp_from_idx else -0.25
+        # arc bends upward (away from data); in matplotlib arc3, negative rad = upward for left-to-right arrows
+        _rad = -0.25 if _cp_to_idx > _cp_from_idx else 0.25
         ax.annotate(
             "",
-            xy=(_cp_to_idx, _arrow_to_y),
-            xytext=(_cp_from_idx, _arrow_from_y),
+            xy=(_cp_to_idx, _cp_to_y),
+            xytext=(_cp_from_idx, _cp_from_y),
             arrowprops=dict(
                 arrowstyle="-|>",
                 color=_cp_color,
