@@ -565,6 +565,13 @@ async def send_grouped_anomaly_alert(channel: discord.TextChannel, anomalies: li
 @tasks.loop(seconds=Config.MONITOR_INTERVAL_SECONDS)
 async def monitor_loop():
     """Background task – checks BQ snapshots for anomalies every hour."""
+    # Reload metric configs every run so newly added/enabled metrics are picked
+    # up without requiring a manual admin-panel reload or bot restart.
+    # _alerted_keys is date-scoped (metric_id, comparison, date) so this never
+    # causes duplicate notifications.
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(None, detector.reload_configs)
+
     alert_channel_id = Config.DISCORD_ALERT_CHANNEL_ID
     if not alert_channel_id:
         logger.warning("DISCORD_ALERT_CHANNEL_ID not set – skipping monitor.")
