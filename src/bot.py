@@ -1026,6 +1026,17 @@ async def _handle_button(interaction: discord.Interaction, custom_id: str):
     # Find metric info
     metric_info = next((m for m in detector._metric_configs if m["metric_id"] == metric_id), None)
 
+    if action == "analyse" and not metric_info:
+        logger.error("Deep analysis: metric_id %r not found in config cache (disabled or cache stale).", metric_id)
+        if not interaction.response.is_done():
+            await interaction.response.defer(ephemeral=True)
+        await interaction.followup.send(
+            "❌ Deep analysis unavailable — this metric may be disabled or the bot config is stale. "
+            "Try reloading config via the admin panel.",
+            ephemeral=True,
+        )
+        return
+
     if action == "analyse" and metric_info:
         # Guard against double-acknowledge (e.g. user double-clicked)
         if interaction.response.is_done():
